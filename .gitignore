@@ -1,0 +1,30 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Excel temp files
+*.xlsx
+*.xls
+*.xlsm
+~$*.xlsx
+
+# Test and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual envs
+.venv/
+env/
+ENV/
+
+# IDEs
+.idea/
+.vscode/
