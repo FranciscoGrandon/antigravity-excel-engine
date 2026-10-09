@@ -1,0 +1,47 @@
+name: Bug Report
+description: Create a report to help us improve Antigravity Excel Engine
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to fill out this bug report!
+  - type: input
+    id: environment
+    attributes:
+      label: Environment Info
+      description: OS version, Python version, and Excel version (e.g. Windows 11, Python 3.12, Office 365 64-bit).
+      placeholder: Windows 11 Pro 64-bit, Python 3.12.3, Microsoft 365 Excel
+    validations:
+      required: true
+  - type: dropdown
+    id: engine_mode
+    attributes:
+      label: Engine Execution Mode
+      description: Which execution mode was active when the bug occurred?
+      options:
+        - auto (Auto-detection)
+        - live (Live COM with active Excel)
+        - file (Headless OpenPyXL)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction Code
+      description: Provide a minimal code snippet reproducing the problem.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback / Log Output
+      description: Copy and paste any error tracebacks here.
+      render: shell
