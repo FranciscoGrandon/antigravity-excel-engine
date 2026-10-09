@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "antigravity-excel-engine"
+version = "1.0.0"
+description = "The Enterprise-Grade, AI-Native Excel Automation Engine for Autonomous Agents and Data Pipelines."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT License"}
+authors = [
+    {name = "Francisco Grandón Vergara", email = "francico.grandon@essbio.cl"}
+]
+dependencies = [
+    "openpyxl>=3.1.2",
+    "pywin32>=306; sys_platform == 'win32'"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/FranciscoGrandon/antigravity-excel-engine"
+
+[project.scripts]
+antigravity-excel = "antigravity_excel_cli:main"
