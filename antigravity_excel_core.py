@@ -146,7 +146,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
             pass
 
         # 2. Try native accessibility hook to interactive desktop Excel window (oleacc)
-        app = self._try_get_live_desktop_excel()
+        app = self._try_get_live_desktop_excel(self.file_path)
         if app:
             return app
 
@@ -155,13 +155,14 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         app.Visible = True
         return app
 
-    def _try_get_live_desktop_excel(self):
+    def _try_get_live_desktop_excel(self, target_file: Optional[str] = None):
         """Intenta engancharse a la instancia visual de Excel abierta por el usuario en WinSta0\\Default."""
         if not (win32gui and win32service and ctypes and uuid and pythoncom):
             return None
         try:
             import threading
             result = []
+            target_name = os.path.basename(target_file).lower() if target_file else None
 
             def worker():
                 try:
@@ -175,7 +176,13 @@ class LiveExcelCOMBackend(BaseExcelBackend):
                     def enum_windows(hwnd, _):
                         cls = win32gui.GetClassName(hwnd)
                         if cls == 'XLMAIN':
-                            excel_hwnds.append(hwnd)
+                            title = win32gui.GetWindowText(hwnd).lower()
+                            # Prioritize window matching filename
+                            if target_name and target_name in title:
+                                excel_hwnds.insert(0, hwnd)
+                            else:
+                                excel_hwnds.append(hwnd)
+
                     win32gui.EnumDesktopWindows(hdesk, enum_windows, None)
 
                     oleacc = ctypes.windll.oleacc
@@ -203,10 +210,10 @@ class LiveExcelCOMBackend(BaseExcelBackend):
                             if hr == 0 and p_disp.value:
                                 unk = pythoncom.ObjectFromAddress(p_disp.value)
                                 disp = unk.QueryInterface(pythoncom.IID_IDispatch)
-                                window = win32com.client.Dispatch(disp)
-                                if window and hasattr(window, 'Application'):
-                                    result.append(window.Application)
-                                    return
+                                # Marshal to stream for main thread
+                                stream = pythoncom.CoMarshalInterThreadInterfaceInStream(pythoncom.IID_IDispatch, disp)
+                                result.append(stream)
+                                return
                 except Exception:
                     pass
 
@@ -215,7 +222,12 @@ class LiveExcelCOMBackend(BaseExcelBackend):
             t.join(timeout=3.0)
 
             if result:
-                return result[0]
+                pythoncom.CoInitialize()
+                stream = result[0]
+                disp = pythoncom.CoGetInterfaceAndReleaseStream(stream, pythoncom.IID_IDispatch)
+                window = win32com.client.Dispatch(disp)
+                if window and hasattr(window, 'Application'):
+                    return window.Application
         except Exception:
             pass
         return None
@@ -223,16 +235,25 @@ class LiveExcelCOMBackend(BaseExcelBackend):
     @retry_on_excel_busy()
     def _init_workbook(self, file_path: Optional[str]):
         if file_path:
-            abs_p = os.path.abspath(file_path)
+            abs_p = os.path.abspath(file_path).lower()
+            base_name = os.path.basename(file_path).lower()
+
             for w in self.app.Workbooks:
-                if os.path.abspath(w.FullName).lower() == abs_p.lower():
-                    return w
+                try:
+                    w_full = str(w.FullName).lower()
+                    w_name = str(w.Name).lower()
+                    if w_full == abs_p or w_name == base_name or base_name in w_full:
+                        return w
+                except Exception:
+                    pass
+
             if os.path.exists(abs_p):
                 return self.app.Workbooks.Open(abs_p)
             else:
                 wb = self.app.Workbooks.Add()
                 wb.SaveAs(abs_p)
                 return wb
+
         if self.app.ActiveWorkbook:
             return self.app.ActiveWorkbook
         return self.app.Workbooks.Add()
@@ -509,7 +530,8 @@ class LiveExcelCOMBackend(BaseExcelBackend):
                 continue
 
             g_key = str(g_val)
-            cell_coord = rng.Cells(r, metric_idx).Address(False, False)
+            addr_prop = rng.Cells(r, metric_idx).Address
+            cell_coord = addr_prop(False, False) if callable(addr_prop) else str(addr_prop).replace("$", "")
 
             if g_key not in groups:
                 groups[g_key] = {
@@ -1051,6 +1073,7 @@ class AntigravityExcelEngine:
         elif self.mode == "file":
             return HeadlessOpenPyXLBackend(self.file_path)
         elif self.mode == "auto":
+            # 1. Check if Excel is active via standard COM ROT
             is_excel_active = False
             if win32com:
                 try:
@@ -1061,7 +1084,19 @@ class AntigravityExcelEngine:
 
             if is_excel_active:
                 return LiveExcelCOMBackend(self.file_path)
-            elif self.file_path and openpyxl:
+
+            # 2. Check if the target file (or an Excel window) is active on desktop via oleacc
+            if win32com and win32gui:
+                try:
+                    tester = LiveExcelCOMBackend.__new__(LiveExcelCOMBackend)
+                    desktop_app = tester._try_get_live_desktop_excel(self.file_path)
+                    if desktop_app:
+                        return LiveExcelCOMBackend(self.file_path)
+                except Exception:
+                    pass
+
+            # 3. Fallback to Headless openpyxl for fast file processing
+            if self.file_path and openpyxl:
                 return HeadlessOpenPyXLBackend(self.file_path)
             elif win32com:
                 return LiveExcelCOMBackend(self.file_path)
