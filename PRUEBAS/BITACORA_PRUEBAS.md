@@ -107,6 +107,64 @@
   - **Celdas de sustento:**
     - Celdas con mayores pérdidas (mínima utilidad) del país: **`L633`** (-$35,262.50), **`L540`** (-$21,560.00), **`L550`** (-$21,560.00).
     - Celdas iniciales del país: **`L6`** ($12,350.00), **`L12`** ($12,350.00), **`L14`** ($47,900.00).
-    - Celdas finales del país: **`L684`** ($3,600.00), **`L698`** ($2,730.00), **`L699`** ($1,299.60).
+### 3. Mejoras de Ingeniería Implementadas en EXCEL_ENGINE
+1. **Método de Agregación Analítica (`aggregate`):**  
+   - Integrado en `BaseExcelBackend`, `LiveExcelCOMBackend` y `HeadlessOpenPyXLBackend`. Permite tabular métricas agregadas (`sum`, `avg`/`mean`, `min`, `max`, `count`) agrupando por cualquier columna categórica y ordenando resultados de forma automática.
+   - Cuenta con normalización insensible a espacios y mayúsculas (`strip().lower()`), previniendo errores ante encabezados sucios como `' Sales'`.
+2. **Rastreo Automático de Celdas de Citación:**  
+   - Cada grupo retornado por `aggregate` reporta explícitamente:
+     - `max_cell` y `max_value`: La celda de mayor valor del grupo (ej. `L194` para Government).
+     - `min_cell` y `min_value`: La celda de menor valor del grupo (ej. `L694` para Enterprise).
+     - `sample_citation_cells`: Muestra representativa de celdas iniciales y finales para trazabilidad de auditoría.
+3. **Comando CLI `aggregate`:**  
+   - Expuesto en `antigravity_excel_cli.py`:
+     ```bash
+     python antigravity_excel_cli.py aggregate --group-by "Segment" --metric "Profit" --file "..." --json
+     ```
+4. **Verificación Automatizada:**  
+   - Suite `pytest tests/ -v` con 5/5 pruebas aprobadas al 100%.
+
+---
+
+## Prueba 3: Inyección de Fórmulas Dinámicas (`3_Formulas\Financial_Sample.xlsx`)
+
+### 1. Metodología de Ejecución
+- Archivo abierto interactivamente por el usuario en Microsoft Excel.
+- Vinculación en vivo a través del canal COM de la ventana interactiva (`XLMAIN` / `EXCEL7`) utilizando `WM_GETOBJECT` y `oleacc.ObjectFromLresult`.
+- Inyección de fórmulas dinámicas nativas de Excel con evaluación en tiempo real y propagación sobre la tabla estructurada oficial `financials`.
+
+### 2. Implementación de Nuevas Columnas
+
+#### Columna Q: `Margen %`
+- **Encabezado:** Celda **`Q1`** = `"Margen %"`.
+- **Fórmula asignada:** **`=L{r}/J{r}`** (Utilidad neta `Profit` dividida por ventas netas ` Sales`).
+  - Ejemplo fila 2: **`Q2`** = `=L2/J2` (evaluado en vivo como `50.0%`).
+  - Ejemplo fila 701: **`Q701`** = `=L701/J701`.
+- **Formato numérico:** Porcentaje con un decimal (`0.0%`).
+
+#### Columna R: `Utilidad por unidad`
+- **Encabezado:** Celda **`R1`** = `"Utilidad por unidad"`.
+- **Fórmula asignada:** **`=L{r}/E{r}`** (Utilidad neta `Profit` dividida por unidades vendidas `Units Sold`).
+  - Ejemplo fila 2: **`R2`** = `=L2/E2` (evaluado en vivo como `$10.00`).
+  - Ejemplo fila 701: **`R701`** = `=L701/E701`.
+- **Formato numérico:** Formato contable estándar de moneda (`$#,##0.00`).
+
+### 4. Mejoras de Ingeniería Implementadas en EXCEL_ENGINE
+1. **Conector Nativo a Ventanas Interactivas de Excel vía Windows Accessibility API (`oleacc`):**  
+   - Integrado en `LiveExcelCOMBackend._try_get_live_desktop_excel`. Resuelve la limitación donde Excel no se publica en la tabla ROT y `GetActiveObject` falla con `0x800401E3`. Localiza la ventana activa del usuario en `WinSta0\Default` y engancha el puntero COM `IDispatch` mediante `oleacc.ObjectFromLresult`.
+2. **Método Atómico de Inyección de Columnas Calculadas (`add_calculated_column`):**  
+   - Implementado en `BaseExcelBackend`, `LiveExcelCOMBackend` y `HeadlessOpenPyXLBackend`. Permite agregar columnas con fórmulas relativas propagadas para todas las filas de datos, aplicar formateo numérico y autoajustar ancho de columna.
+3. **Redimensionamiento Automático de Tablas Estructuradas (`ListObjects` / `Table`):**  
+   - Al invocar `add_calculated_column` en hojas que contienen tablas oficiales (como `financials`), el motor redimensiona automáticamente el rango de la tabla (ej. `A1:P701` $\rightarrow$ `A1:R701`) incorporando formalmente las nuevas columnas al esquema de datos.
+4. **Comando CLI `add-column`:**  
+   - Expuesto en `antigravity_excel_cli.py`:
+     ```bash
+     python antigravity_excel_cli.py add-column --header "Margen %" --formula "=L2/J2" --number-format "0.0%" --file "..." --json
+     ```
+5. **Verificación Automatizada:**  
+   - Suite `pytest tests/ -v` ampliada con `test_add_calculated_column` (6/6 pruebas aprobadas al 100%).
+
+
+
 
 

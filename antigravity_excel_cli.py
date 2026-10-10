@@ -85,6 +85,23 @@ def main():
     audit_quality_parser.add_argument("--range", help="Rango opcional a auditar (ej. A1:P701)")
     audit_quality_parser.add_argument("--sheet", help="Pestaña de la hoja")
 
+    # aggregate
+    agg_parser = subparsers.add_parser("aggregate", parents=[parent_parser], help="Agrupación analítica (Pivot/Groupby)")
+    agg_parser.add_argument("--group-by", required=True, help="Nombre de la columna para agrupar (ej. Segment)")
+    agg_parser.add_argument("--metric", required=True, help="Nombre de la columna métrica numérica (ej. Profit)")
+    agg_parser.add_argument("--func", default="sum", choices=["sum", "avg", "mean", "count", "min", "max"], help="Función de agregación (default: sum)")
+    agg_parser.add_argument("--sheet", help="Pestaña de la hoja")
+    agg_parser.add_argument("--top", type=int, default=10, help="Límite de grupos a mostrar (default: 10)")
+    agg_parser.add_argument("--ascending", action="store_true", help="Ordenar de menor a mayor")
+
+    # add-column (columna calculada con fórmulas vectorizadas)
+    add_col_parser = subparsers.add_parser("add-column", parents=[parent_parser], help="Agregar columna calculada con fórmulas")
+    add_col_parser.add_argument("--header", required=True, help="Nombre del encabezado de la nueva columna")
+    add_col_parser.add_argument("--formula", required=True, help="Fórmula relativa base fila 2 (ej. =L2/J2)")
+    add_col_parser.add_argument("--number-format", help="Máscara de formato numérico (ej. 0.0%% o $#,##0.00)")
+    add_col_parser.add_argument("--sheet", help="Pestaña de la hoja")
+    add_col_parser.add_argument("--no-autofit", action="store_true", help="Desactivar autoajuste de ancho de columna")
+
     args = parser.parse_args()
 
     def output(data):
@@ -169,6 +186,29 @@ def main():
         elif args.command == "audit-quality":
             report = engine.audit_data_quality(range_str=args.range, sheet=args.sheet)
             output({"status": "success", "audit_report": report})
+
+        elif args.command == "aggregate":
+            res = engine.aggregate(
+                group_by_col=args.group_by,
+                metric_col=args.metric,
+                agg_func=args.func,
+                sheet=args.sheet,
+                top_n=args.top,
+                ascending=args.ascending
+            )
+            output({"status": "success", "aggregation": res})
+
+        elif args.command == "add-column":
+            res = engine.add_calculated_column(
+                header=args.header,
+                formula_template=args.formula,
+                number_format=args.number_format,
+                sheet=args.sheet,
+                autofit=not args.no_autofit
+            )
+            saved_to = engine.save()
+            res["saved_to"] = saved_to
+            output(res)
 
     except Exception as e:
         if args.json:

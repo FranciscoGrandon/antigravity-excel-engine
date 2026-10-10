@@ -19,12 +19,22 @@ try:
     import pywintypes
     import win32file
     import win32con
+    import win32gui
+    import win32service
+    import ctypes
+    import uuid
+    from ctypes import wintypes
 except ImportError:
     win32com = None
     pythoncom = None
     pywintypes = None
     win32file = None
     win32con = None
+    win32gui = None
+    win32service = None
+    ctypes = None
+    uuid = None
+    wintypes = None
 
 try:
     import openpyxl
@@ -103,6 +113,9 @@ class BaseExcelBackend(ABC):
 
     @abstractmethod
     def aggregate(self, group_by_col: str, metric_col: str, agg_func: str = "sum", sheet: Optional[str] = None, top_n: int = 10, ascending: bool = False) -> Dict[str, Any]: pass
+
+    @abstractmethod
+    def add_calculated_column(self, header: str, formula_template: str, number_format: Optional[str] = None, sheet: Optional[str] = None, autofit: bool = True) -> Dict[str, Any]: pass
     
     @abstractmethod
     def save(self, file_path: Optional[str] = None) -> str: pass
@@ -124,14 +137,88 @@ class LiveExcelCOMBackend(BaseExcelBackend):
 
     @retry_on_excel_busy()
     def _init_app(self):
+        # 1. Try standard GetActiveObject
         try:
             app = win32com.client.GetActiveObject("Excel.Application")
             app.Visible = True
             return app
         except Exception:
-            app = win32com.client.Dispatch("Excel.Application")
-            app.Visible = True
+            pass
+
+        # 2. Try native accessibility hook to interactive desktop Excel window (oleacc)
+        app = self._try_get_live_desktop_excel()
+        if app:
             return app
+
+        # 3. Fallback to Dispatch
+        app = win32com.client.Dispatch("Excel.Application")
+        app.Visible = True
+        return app
+
+    def _try_get_live_desktop_excel(self):
+        """Intenta engancharse a la instancia visual de Excel abierta por el usuario en WinSta0\\Default."""
+        if not (win32gui and win32service and ctypes and uuid and pythoncom):
+            return None
+        try:
+            import threading
+            result = []
+
+            def worker():
+                try:
+                    pythoncom.CoInitialize()
+                    hwinsta = win32service.OpenWindowStation('WinSta0', False, 0x10000000)
+                    hwinsta.SetProcessWindowStation()
+                    hdesk = win32service.OpenDesktop('Default', 0, False, 0x10000000)
+                    hdesk.SetThreadDesktop()
+
+                    excel_hwnds = []
+                    def enum_windows(hwnd, _):
+                        cls = win32gui.GetClassName(hwnd)
+                        if cls == 'XLMAIN':
+                            excel_hwnds.append(hwnd)
+                    win32gui.EnumDesktopWindows(hdesk, enum_windows, None)
+
+                    oleacc = ctypes.windll.oleacc
+                    oleacc.ObjectFromLresult.restype = ctypes.c_long
+                    oleacc.ObjectFromLresult.argtypes = [
+                        wintypes.LPARAM,
+                        ctypes.c_char_p,
+                        wintypes.WPARAM,
+                        ctypes.POINTER(ctypes.c_void_p)
+                    ]
+
+                    for x_hwnd in excel_hwnds:
+                        excel7_hwnd = None
+                        def enum_child(h, _):
+                            nonlocal excel7_hwnd
+                            if win32gui.GetClassName(h) == 'EXCEL7':
+                                excel7_hwnd = h
+                        win32gui.EnumChildWindows(x_hwnd, enum_child, None)
+
+                        if excel7_hwnd:
+                            lres = win32gui.SendMessage(excel7_hwnd, 0x003D, 0, -16 & 0xFFFFFFFF)
+                            iid_bytes = uuid.UUID('{00020400-0000-0000-C000-000000000046}').bytes_le
+                            p_disp = ctypes.c_void_p()
+                            hr = oleacc.ObjectFromLresult(lres, iid_bytes, 0, ctypes.byref(p_disp))
+                            if hr == 0 and p_disp.value:
+                                unk = pythoncom.ObjectFromAddress(p_disp.value)
+                                disp = unk.QueryInterface(pythoncom.IID_IDispatch)
+                                window = win32com.client.Dispatch(disp)
+                                if window and hasattr(window, 'Application'):
+                                    result.append(window.Application)
+                                    return
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=worker)
+            t.start()
+            t.join(timeout=3.0)
+
+            if result:
+                return result[0]
+        except Exception:
+            pass
+        return None
 
     @retry_on_excel_busy()
     def _init_workbook(self, file_path: Optional[str]):
@@ -383,6 +470,151 @@ class LiveExcelCOMBackend(BaseExcelBackend):
             "header_whitespace_issues": header_whitespace,
             "numbers_stored_as_text": numbers_as_text,
             "inconsistent_column_types": inconsistent_types
+        }
+
+    @retry_on_excel_busy()
+    def aggregate(self, group_by_col: str, metric_col: str, agg_func: str = "sum", sheet: Optional[str] = None, top_n: int = 10, ascending: bool = False) -> Dict[str, Any]:
+        ws = self._get_sheet(sheet)
+        rng = ws.UsedRange
+        rows_cnt = rng.Rows.Count
+        cols_cnt = rng.Columns.Count
+
+        # Find column indices (flexible case/whitespace)
+        norm_group = group_by_col.strip().lower()
+        norm_metric = metric_col.strip().lower()
+
+        group_idx = None
+        metric_idx = None
+
+        for c in range(1, cols_cnt + 1):
+            h_val = str(rng.Cells(1, c).Value or "").strip().lower()
+            if h_val == norm_group and group_idx is None:
+                group_idx = c
+            if h_val == norm_metric and metric_idx is None:
+                metric_idx = c
+
+        if group_idx is None or metric_idx is None:
+            raise ValueError(f"No se encontraron las columnas especificadas: group_by='{group_by_col}', metric='{metric_col}'")
+
+        groups = {}
+        for r in range(2, rows_cnt + 1):
+            g_val = rng.Cells(r, group_idx).Value
+            m_val = rng.Cells(r, metric_idx).Value
+            if g_val is None or m_val is None:
+                continue
+
+            try:
+                num = float(m_val)
+            except (ValueError, TypeError):
+                continue
+
+            g_key = str(g_val)
+            cell_coord = rng.Cells(r, metric_idx).Address(False, False)
+
+            if g_key not in groups:
+                groups[g_key] = {
+                    "count": 0,
+                    "values": [],
+                    "cells": [],
+                    "min_val": num,
+                    "min_cell": cell_coord,
+                    "max_val": num,
+                    "max_cell": cell_coord
+                }
+
+            entry = groups[g_key]
+            entry["count"] += 1
+            entry["values"].append(num)
+            entry["cells"].append(cell_coord)
+
+            if num < entry["min_val"]:
+                entry["min_val"] = num
+                entry["min_cell"] = cell_coord
+            if num > entry["max_val"]:
+                entry["max_val"] = num
+                entry["max_cell"] = cell_coord
+
+        results = []
+        for g_key, data in groups.items():
+            vals = data["values"]
+            total = sum(vals)
+            avg = total / len(vals) if vals else 0.0
+
+            if agg_func.lower() == "sum":
+                agg_val = total
+            elif agg_func.lower() in ("avg", "mean"):
+                agg_val = avg
+            elif agg_func.lower() == "min":
+                agg_val = data["min_val"]
+            elif agg_func.lower() == "max":
+                agg_val = data["max_val"]
+            elif agg_func.lower() == "count":
+                agg_val = float(data["count"])
+            else:
+                agg_val = total
+
+            results.append({
+                "group": g_key,
+                "aggregated_value": round(agg_val, 2),
+                "total_sum": round(total, 2),
+                "average": round(avg, 2),
+                "count": data["count"],
+                "max_cell": data["max_cell"],
+                "max_value": round(data["max_val"], 2),
+                "min_cell": data["min_cell"],
+                "min_value": round(data["min_val"], 2),
+                "sample_citation_cells": data["cells"][:3] + data["cells"][-3:] if len(data["cells"]) > 6 else data["cells"]
+            })
+
+        results.sort(key=lambda x: x["aggregated_value"], reverse=not ascending)
+        if top_n > 0:
+            results = results[:top_n]
+
+        return {
+            "sheet": ws.Name,
+            "group_by": group_by_col,
+            "metric": metric_col,
+            "agg_func": agg_func,
+            "groups_count": len(results),
+            "ranking": results
+        }
+
+    @retry_on_excel_busy()
+    def add_calculated_column(self, header: str, formula_template: str, number_format: Optional[str] = None, sheet: Optional[str] = None, autofit: bool = True) -> Dict[str, Any]:
+        ws = self._get_sheet(sheet)
+        rng = ws.UsedRange
+        last_col = rng.Columns.Count
+        new_col = last_col + 1
+        last_row = rng.Rows.Count
+
+        # Set header
+        ws.Cells(1, new_col).Value = header
+
+        # Set formula for data rows (vectorized in Excel COM)
+        data_rng = ws.Range(ws.Cells(2, new_col), ws.Cells(last_row, new_col))
+        data_rng.Formula = formula_template
+
+        if number_format:
+            data_rng.NumberFormat = number_format
+
+        # Auto-resize ListObject table if sheet contains structured tables
+        table_resized = None
+        if ws.ListObjects.Count > 0:
+            tbl = ws.ListObjects(1)
+            tbl.Resize(ws.Range(ws.Cells(1, 1), ws.Cells(last_row, new_col)))
+            table_resized = tbl.Name
+
+        if autofit:
+            ws.Columns(new_col).AutoFit()
+
+        return {
+            "status": "success",
+            "sheet": ws.Name,
+            "header": header,
+            "column_index": new_col,
+            "formula_applied": formula_template,
+            "rows_affected": last_row - 1,
+            "table_resized": table_resized
         }
 
     @retry_on_excel_busy()
@@ -646,6 +878,152 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
             "header_whitespace_issues": header_whitespace,
             "numbers_stored_as_text": numbers_as_text,
             "inconsistent_column_types": inconsistent_types
+        }
+
+    def aggregate(self, group_by_col: str, metric_col: str, agg_func: str = "sum", sheet: Optional[str] = None, top_n: int = 10, ascending: bool = False) -> Dict[str, Any]:
+        ws = self._get_sheet(sheet)
+        norm_group = group_by_col.strip().lower()
+        norm_metric = metric_col.strip().lower()
+
+        group_idx = None
+        metric_idx = None
+
+        for col_idx in range(1, ws.max_column + 1):
+            h_val = str(ws.cell(row=1, column=col_idx).value or "").strip().lower()
+            if h_val == norm_group and group_idx is None:
+                group_idx = col_idx
+            if h_val == norm_metric and metric_idx is None:
+                metric_idx = col_idx
+
+        if group_idx is None or metric_idx is None:
+            raise ValueError(f"No se encontraron las columnas especificadas: group_by='{group_by_col}', metric='{metric_col}'")
+
+        groups = {}
+        for r_idx in range(2, ws.max_row + 1):
+            g_val = ws.cell(row=r_idx, column=group_idx).value
+            m_val = ws.cell(row=r_idx, column=metric_idx).value
+            if g_val is None or m_val is None:
+                continue
+
+            try:
+                num = float(m_val)
+            except (ValueError, TypeError):
+                continue
+
+            g_key = str(g_val)
+            cell_coord = ws.cell(row=r_idx, column=metric_idx).coordinate
+
+            if g_key not in groups:
+                groups[g_key] = {
+                    "count": 0,
+                    "values": [],
+                    "cells": [],
+                    "min_val": num,
+                    "min_cell": cell_coord,
+                    "max_val": num,
+                    "max_cell": cell_coord
+                }
+
+            entry = groups[g_key]
+            entry["count"] += 1
+            entry["values"].append(num)
+            entry["cells"].append(cell_coord)
+
+            if num < entry["min_val"]:
+                entry["min_val"] = num
+                entry["min_cell"] = cell_coord
+            if num > entry["max_val"]:
+                entry["max_val"] = num
+                entry["max_cell"] = cell_coord
+
+        results = []
+        for g_key, data in groups.items():
+            vals = data["values"]
+            total = sum(vals)
+            avg = total / len(vals) if vals else 0.0
+
+            if agg_func.lower() == "sum":
+                agg_val = total
+            elif agg_func.lower() in ("avg", "mean"):
+                agg_val = avg
+            elif agg_func.lower() == "min":
+                agg_val = data["min_val"]
+            elif agg_func.lower() == "max":
+                agg_val = data["max_val"]
+            elif agg_func.lower() == "count":
+                agg_val = float(data["count"])
+            else:
+                agg_val = total
+
+            results.append({
+                "group": g_key,
+                "aggregated_value": round(agg_val, 2),
+                "total_sum": round(total, 2),
+                "average": round(avg, 2),
+                "count": data["count"],
+                "max_cell": data["max_cell"],
+                "max_value": round(data["max_val"], 2),
+                "min_cell": data["min_cell"],
+                "min_value": round(data["min_val"], 2),
+                "sample_citation_cells": data["cells"][:3] + data["cells"][-3:] if len(data["cells"]) > 6 else data["cells"]
+            })
+
+        results.sort(key=lambda x: x["aggregated_value"], reverse=not ascending)
+        if top_n > 0:
+            results = results[:top_n]
+
+        return {
+            "sheet": ws.title,
+            "group_by": group_by_col,
+            "metric": metric_col,
+            "agg_func": agg_func,
+            "groups_count": len(results),
+            "ranking": results
+        }
+
+    def add_calculated_column(self, header: str, formula_template: str, number_format: Optional[str] = None, sheet: Optional[str] = None, autofit: bool = True) -> Dict[str, Any]:
+        from openpyxl.worksheet.table import TableColumn
+        ws = self._get_sheet(sheet)
+        new_col = ws.max_column + 1
+        max_row = ws.max_row
+
+        # Set header
+        ws.cell(row=1, column=new_col, value=header)
+
+        # Parse formula_template to adapt relative row numbers
+        # If formula has row 2 (e.g. '=L2/J2'), replace with target row
+        for r in range(2, max_row + 1):
+            cell = ws.cell(row=r, column=new_col)
+            row_formula = re.sub(r'([A-Za-z]+)2\b', rf'\g<1>{r}', formula_template)
+            cell.value = row_formula
+            if number_format:
+                cell.number_format = number_format
+
+        # Auto-resize openpyxl table if present
+        table_resized = None
+        for tbl in ws.tables.values():
+            min_c, min_r, max_c, max_r = range_boundaries(tbl.ref)
+            if new_col == max_c + 1:
+                new_ref = f"{get_column_letter(min_c)}{min_r}:{get_column_letter(new_col)}{max_r}"
+                tbl.ref = new_ref
+                new_col_id = len(tbl.tableColumns) + 1
+                tbl.tableColumns.append(TableColumn(id=new_col_id, name=header))
+                table_resized = tbl.name
+                break
+
+        if autofit:
+            col_letter = get_column_letter(new_col)
+            max_len = max(len(str(ws.cell(row=r, column=new_col).value or '')) for r in range(1, max_row + 1))
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+        return {
+            "status": "success",
+            "sheet": ws.title,
+            "header": header,
+            "column_index": new_col,
+            "formula_applied": formula_template,
+            "rows_affected": max_row - 1,
+            "table_resized": table_resized
         }
 
     def save(self, file_path: Optional[str] = None) -> str:

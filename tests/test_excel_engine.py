@@ -85,6 +85,45 @@ class TestAntigravityExcelEngine(unittest.TestCase):
         self.assertEqual(len(report["numbers_stored_as_text"]), 2)
         self.assertFalse(report["has_dynamic_formulas"])
 
+    def test_aggregate(self):
+        data = [
+            ["Region", "Ventas"],
+            ["Norte", 100],
+            ["Sur", 200],
+            ["Norte", 150],
+            ["Sur", 50]
+        ]
+        self.engine.set_cell_range("A1", data)
+        self.engine.save()
+
+        res = self.engine.aggregate("Region", "Ventas", agg_func="sum")
+        self.assertEqual(res["groups_count"], 2)
+        top = res["ranking"][0]
+        self.assertEqual(top["group"], "Norte")
+        self.assertEqual(top["aggregated_value"], 250)
+        self.assertEqual(top["max_cell"], "B4")
+
+    def test_add_calculated_column(self):
+        data = [
+            ["Precio", "Cantidad"],
+            [10, 2],
+            [20, 3]
+        ]
+        self.engine.set_cell_range("A1", data)
+        self.engine.save()
+
+        res = self.engine.add_calculated_column("Total", "=A2*B2", number_format="$#,##0.00")
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["header"], "Total")
+        self.assertEqual(res["column_index"], 3)
+        self.engine.save()
+
+        # Check values and formulas
+        ranges = self.engine.get_cell_ranges(["C1:C3"], include_formulas=True)
+        self.assertEqual(ranges["C1:C3"]["values"][0][0], "Total")
+        self.assertEqual(ranges["C1:C3"]["formulas"][1][0], "=A2*B2")
+        self.assertEqual(ranges["C1:C3"]["formulas"][2][0], "=A3*B3")
+
 
 if __name__ == "__main__":
     unittest.main()
