@@ -29,11 +29,10 @@ def load_json_or_file(arg_val: str) -> Any:
 def main():
     parent_parser = argparse.ArgumentParser(add_help=False)
     parent_parser.add_argument("--json", action="store_true", help="Salida en formato JSON")
+    parent_parser.add_argument("--mode", choices=["auto", "live", "file"], default="auto", help="Modo de ejecución")
+    parent_parser.add_argument("--file", help="Ruta al archivo .xlsx")
 
     parser = argparse.ArgumentParser(description="Antigravity Excel Engine CLI", parents=[parent_parser])
-    parser.add_argument("--mode", choices=["auto", "live", "file"], default="auto", help="Modo de ejecución")
-    parser.add_argument("--file", help="Ruta al archivo .xlsx")
-
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # status
@@ -80,6 +79,11 @@ def main():
     check_errors_parser = subparsers.add_parser("check-errors", parents=[parent_parser], help="Verificar errores de fórmulas (#VALUE!, #REF!)")
     check_errors_parser.add_argument("range", help="Rango a auditar")
     check_errors_parser.add_argument("--sheet", help="Pestaña de la hoja")
+
+    # audit-quality
+    audit_quality_parser = subparsers.add_parser("audit-quality", parents=[parent_parser], help="Auditoría de calidad e higiene de datos")
+    audit_quality_parser.add_argument("--range", help="Rango opcional a auditar (ej. A1:P701)")
+    audit_quality_parser.add_argument("--sheet", help="Pestaña de la hoja")
 
     args = parser.parse_args()
 
@@ -161,6 +165,10 @@ def main():
         elif args.command == "check-errors":
             errs = engine.check_formula_errors(args.range, sheet=args.sheet)
             output({"status": "success", "errors_count": len(errs), "errors": errs})
+
+        elif args.command == "audit-quality":
+            report = engine.audit_data_quality(range_str=args.range, sheet=args.sheet)
+            output({"status": "success", "audit_report": report})
 
     except Exception as e:
         if args.json:

@@ -70,6 +70,21 @@ class TestAntigravityExcelEngine(unittest.TestCase):
         self.assertEqual(ranges["D1:E2"]["values"][0][0], "A")
         self.assertEqual(ranges["D1:E2"]["values"][1][1], 20)
 
+    def test_audit_data_quality(self):
+        data = [
+            ["ID", " Nombre ", "Year"],
+            [1, "Cliente A", "2024"],
+            [2, "Cliente B", "2025"]
+        ]
+        self.engine.set_cell_range("A1", data)
+        self.engine.save()
+
+        report = self.engine.audit_data_quality()
+        self.assertEqual(len(report["header_whitespace_issues"]), 1)
+        self.assertEqual(report["header_whitespace_issues"][0]["trimmed"], "Nombre")
+        self.assertEqual(len(report["numbers_stored_as_text"]), 2)
+        self.assertFalse(report["has_dynamic_formulas"])
+
 
 if __name__ == "__main__":
     unittest.main()

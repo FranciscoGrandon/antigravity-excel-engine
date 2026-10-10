@@ -17,10 +17,14 @@ try:
     import win32com.client
     import pythoncom
     import pywintypes
+    import win32file
+    import win32con
 except ImportError:
     win32com = None
     pythoncom = None
     pywintypes = None
+    win32file = None
+    win32con = None
 
 try:
     import openpyxl
@@ -93,6 +97,12 @@ class BaseExcelBackend(ABC):
     
     @abstractmethod
     def check_formula_errors(self, range_str: str, sheet: Optional[str] = None) -> List[Dict[str, Any]]: pass
+
+    @abstractmethod
+    def audit_data_quality(self, range_str: Optional[str] = None, sheet: Optional[str] = None) -> Dict[str, Any]: pass
+
+    @abstractmethod
+    def aggregate(self, group_by_col: str, metric_col: str, agg_func: str = "sum", sheet: Optional[str] = None, top_n: int = 10, ascending: bool = False) -> Dict[str, Any]: pass
     
     @abstractmethod
     def save(self, file_path: Optional[str] = None) -> str: pass
@@ -311,6 +321,71 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         return errors
 
     @retry_on_excel_busy()
+    def audit_data_quality(self, range_str: Optional[str] = None, sheet: Optional[str] = None) -> Dict[str, Any]:
+        ws = self._get_sheet(sheet)
+        if range_str:
+            rng = ws.Range(range_str)
+        else:
+            rng = ws.UsedRange
+
+        header_whitespace = []
+        numbers_as_text = []
+        inconsistent_types = []
+        total_formulas = 0
+        total_cells = rng.Count
+        
+        # Check first row (headers)
+        rows_cnt = rng.Rows.Count
+        cols_cnt = rng.Columns.Count
+        
+        for c_idx in range(1, cols_cnt + 1):
+            h_cell = rng.Cells(1, c_idx)
+            val = str(h_cell.Value or "")
+            if val and (val.startswith(" ") or val.endswith(" ") or "  " in val):
+                header_whitespace.append({
+                    "cell": h_cell.Address(False, False),
+                    "header": val,
+                    "trimmed": val.strip()
+                })
+
+        # Check column types and text numbers
+        for c_idx in range(1, cols_cnt + 1):
+            h_name = str(rng.Cells(1, c_idx).Value or f"Col_{c_idx}")
+            col_types = set()
+            for r_idx in range(2, min(rows_cnt + 1, 1000)):
+                cell = rng.Cells(r_idx, c_idx)
+                val = cell.Value
+                formula = str(cell.Formula or "")
+                if formula.startswith("="):
+                    total_formulas += 1
+                if val is not None:
+                    col_types.add(type(val).__name__)
+                    if isinstance(val, str) and val.strip().replace(".", "", 1).replace("-", "", 1).isdigit():
+                        if len(numbers_as_text) < 50:
+                            numbers_as_text.append({
+                                "cell": cell.Address(False, False),
+                                "column": h_name,
+                                "value": val
+                            })
+            if len(col_types) > 1:
+                inconsistent_types.append({
+                    "column_index": c_idx,
+                    "header": h_name,
+                    "types_detected": list(col_types)
+                })
+
+        return {
+            "sheet": ws.Name,
+            "range_audited": rng.Address(False, False),
+            "total_cells": total_cells,
+            "has_dynamic_formulas": (total_formulas > 0),
+            "formula_count": total_formulas,
+            "header_whitespace_issues": header_whitespace,
+            "numbers_stored_as_text": numbers_as_text,
+            "inconsistent_column_types": inconsistent_types
+        }
+
+    @retry_on_excel_busy()
     def save(self, file_path: Optional[str] = None) -> str:
         if file_path:
             abs_p = os.path.abspath(file_path)
@@ -329,9 +404,35 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
             raise ImportError("openpyxl no está instalado en este entorno.")
         self.file_path = file_path
         if file_path and os.path.exists(file_path):
-            self.wb = openpyxl.load_workbook(file_path, data_only=False)
+            self.wb = self._load_workbook_resilient(file_path)
         else:
             self.wb = openpyxl.Workbook()
+
+    def _load_workbook_resilient(self, file_path: str):
+        """Carga openpyxl soportando lectura concurrente si el archivo está bloqueado por Excel."""
+        try:
+            return openpyxl.load_workbook(file_path, data_only=False)
+        except PermissionError:
+            if win32file and win32con:
+                handle = win32file.CreateFile(
+                    os.path.abspath(file_path),
+                    win32file.GENERIC_READ,
+                    win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE | win32file.FILE_SHARE_DELETE,
+                    None,
+                    win32file.OPEN_EXISTING,
+                    win32file.FILE_ATTRIBUTE_NORMAL,
+                    None
+                )
+                chunks = []
+                while True:
+                    hr, data = win32file.ReadFile(handle, 64 * 1024)
+                    if not data:
+                        break
+                    chunks.append(data)
+                win32file.CloseHandle(handle)
+                buffer = io.BytesIO(b"".join(chunks))
+                return openpyxl.load_workbook(buffer, data_only=False)
+            raise
 
     def _get_sheet(self, sheet_name: Optional[str]):
         if sheet_name:
@@ -484,6 +585,68 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
                         "formula": cell.value
                     })
         return errors
+
+    def audit_data_quality(self, range_str: Optional[str] = None, sheet: Optional[str] = None) -> Dict[str, Any]:
+        ws = self._get_sheet(sheet)
+        if range_str:
+            min_col, min_row, max_col, max_row = range_boundaries(range_str)
+        else:
+            min_col, min_row, max_col, max_row = 1, 1, ws.max_column, ws.max_row
+
+        header_whitespace = []
+        numbers_as_text = []
+        inconsistent_types = []
+        total_formulas = 0
+        total_cells = (max_row - min_row + 1) * (max_col - min_col + 1)
+
+        # Check headers (first row)
+        for col_idx in range(min_col, max_col + 1):
+            cell = ws.cell(row=min_row, column=col_idx)
+            val = str(cell.value or "")
+            if val and (val.startswith(" ") or val.endswith(" ") or "  " in val):
+                header_whitespace.append({
+                    "cell": cell.coordinate,
+                    "header": val,
+                    "trimmed": val.strip()
+                })
+
+        # Check column types, formulas, and numbers formatted as text
+        for col_idx in range(min_col, max_col + 1):
+            header_cell = ws.cell(row=min_row, column=col_idx)
+            h_name = str(header_cell.value or f"Col_{col_idx}")
+            col_types = set()
+            for r_idx in range(min_row + 1, min(max_row + 1, min_row + 1000)):
+                cell = ws.cell(row=r_idx, column=col_idx)
+                val = cell.value
+                if isinstance(val, str) and val.startswith("="):
+                    total_formulas += 1
+                if val is not None:
+                    col_types.add(type(val).__name__)
+                    if isinstance(val, str) and val.strip().replace(".", "", 1).replace("-", "", 1).isdigit():
+                        if len(numbers_as_text) < 50:
+                            numbers_as_text.append({
+                                "cell": cell.coordinate,
+                                "column": h_name,
+                                "value": val
+                            })
+            if len(col_types) > 1:
+                inconsistent_types.append({
+                    "column_index": col_idx,
+                    "header": h_name,
+                    "types_detected": list(col_types)
+                })
+
+        range_name = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+        return {
+            "sheet": ws.title,
+            "range_audited": range_name,
+            "total_cells": total_cells,
+            "has_dynamic_formulas": (total_formulas > 0),
+            "formula_count": total_formulas,
+            "header_whitespace_issues": header_whitespace,
+            "numbers_stored_as_text": numbers_as_text,
+            "inconsistent_column_types": inconsistent_types
+        }
 
     def save(self, file_path: Optional[str] = None) -> str:
         out_path = file_path or self.file_path
