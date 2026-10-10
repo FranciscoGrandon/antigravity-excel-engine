@@ -164,6 +164,212 @@
 5. **Verificación Automatizada:**  
    - Suite `pytest tests/ -v` ampliada con `test_add_calculated_column` (6/6 pruebas aprobadas al 100%).
 
+---
+
+## Prueba 4: Creación de Tabla Dinámica y Gráfico Estadístico (`4_Tabla_dinamica\Financial_Sample.xlsx`)
+
+### 1. Metodología de Ejecución
+- Archivo abierto interactivamente por el usuario en Microsoft Excel sobre OneDrive / SharePoint.
+- Vinculación en vivo a través del backend COM interactivo (`LiveExcelCOMBackend`) enganchado mediante `oleacc`.
+- Creación de una nueva pestaña de análisis denominada `Resumen_Pais` con cuadrícula de celdas visible activa (`DisplayGridlines = True`).
+- Construcción de un `PivotCache` nativo alimentado desde la tabla estructurada `financials` (`A1:P701`) y despliegue del `PivotTable` (`PT_Utilidad_Pais`) en la celda `A3`.
+- Configuración de campos: `Country` como fila (`xlRowField`), `Profit` como valor agregado (`xlSum`) con formato de moneda (`$#,##0.00`) y autoajuste automático de columnas (`AutoFit`).
+- Incorporación de un gráfico de columnas agrupadas (`xlColumnClustered`) enlazado a la tabla dinámica, posicionado de manera no invasiva a la derecha (`placement='auto'` $\rightarrow$ `E3`, margen de 2 columnas) para evitar cualquier solapamiento visual con la tabla.
+
+### 2. Resultados Consolidados de la Tabla Dinámica (`Resumen_Pais!A3:B9`)
+
+| País (`Country`) | Utilidad Neta Total (`Sum de Profit`) |
+| :--- | :---: |
+| **France** | **$3,781,020.78** |
+| **Germany** | **$3,680,388.82** |
+| **Canada** | **$3,529,228.89** |
+| **United States of America** | **$2,995,540.67** |
+| **Mexico** | **$2,907,523.11** |
+| **Total General** | **$16,893,702.26** |
+
+- **Gráfico Asociado:** Objeto `ChartObject` de tipo columna agrupada con título *"Utilidad Neta por País"*, anclado en `E3` (Left: 330.0 pt, Top: 28.8 pt, Width: 480 pt, Height: 300 pt).
+
+### 3. Conclusión
+La generación automatizada de tablas dinámicas y gráficos vinculados en vivo valida la capacidad de análisis multidimensional de Antigravity Excel Engine sin alterar los datos crudos originales. El cálculo geométrico anti-solapamiento garantiza reportes ejecutivos limpios y listos para presentación gerencial, con total paridad entre el entorno interactivo COM y el procesamiento por lotes Headless. La coherencia matemática del 100% frente a la agregación de la Prueba 2 ratifica la precisión analítica y robustez del motor.
+
+### 4. Mejoras de Ingeniería Implementadas en EXCEL_ENGINE
+1. **Helper de Posicionamiento Geométrico Anti-Solapamiento (`_calculate_placement_coordinates`):**  
+   - Integrado en `BaseExcelBackend`. Evalúa las dimensiones de la tabla origen; si `placement='auto'`, ubica el elemento a la derecha dejando 2 columnas libres cuando el número de columnas es $\le 8$, o abajo dejando 2 filas libres cuando es $> 8$. Admite también posicionamiento explícito `'right'`, `'bottom'` o anclaje a celda personalizada (ej. `'I3'`).
+2. **Método Atómico de Tabla Dinámica (`create_pivot_table`):**  
+   - Implementado en `LiveExcelCOMBackend` y `HeadlessOpenPyXLBackend`:
+     - En **Live COM**: crea el `PivotCache` (tipo `xlDatabase`), instancia la tabla dinámica en la hoja destino (creándola automáticamente si no existe), asigna campos a filas y columnas, inyecta el campo de valor con función de agregación (`sum`, `count`, `average`/`avg`, `min`, `max`), aplica máscara numérica y asegura `DisplayGridlines` y `AutoFit`.
+     - En **Headless OpenPyXL**: procesa los datos en memoria para generar una tabla cruzada (*cross-tabulation*) de doble entrada con filas, columnas, subtotales, fila/columna de Total General, bordes corporativos, tipografía Segoe UI y formato numérico.
+3. **Método Atómico de Gráficos No Invasivos (`create_chart`):**  
+   - Implementado en `LiveExcelCOMBackend` y `HeadlessOpenPyXLBackend`:
+     - En **Live COM**: crea un `ChartObject` en las coordenadas geométricas calculadas para evitar solapamientos, enlaza la fuente (`SetSourceData`), configura el tipo (`column_clustered`, `bar_clustered`, `line`, `pie`, `area`) y establece el título.
+     - En **Headless OpenPyXL**: inserta el gráfico correspondiente (`openpyxl.chart.BarChart`, `LineChart`, etc.) excluyendo los totales generales para mantener la escala adecuada de la serie, y lo ancla en la celda calculada.
+4. **Comandos CLI `create-pivot` y `create-chart`:**  
+   - Expuestos en `antigravity_excel_cli.py`:
+     ```bash
+     python antigravity_excel_cli.py create-pivot --source "financials" --rows Country --value-field Profit --value-func sum --value-format "$#,##0.00" --dest-sheet "Resumen_Pais" --dest-cell "A3" --table-name "PT_Utilidad_Pais" --file "..." --json
+     python antigravity_excel_cli.py create-chart --source "PT_Utilidad_Pais" --chart-type "column_clustered" --title "Utilidad Neta por País" --dest-sheet "Resumen_Pais" --placement "auto" --file "..." --json
+     ```
+5. **Verificación Automatizada:**  
+   - Suite `pytest tests/ -v` ampliada con `test_calculate_placement_coordinates`, `test_create_pivot_table_headless` y `test_create_chart_headless` (9/9 pruebas aprobadas al 100%).
+
+---
+
+## Prueba 5: Simulación de Escenarios y Modelado Comparativo
+
+### 1. Metodología de Ejecución
+- Creación de un modelo de simulación y comparativa financiera profesional basado en parámetros y supuestos macroeconómicos / de negocio vinculados.
+- Despliegue de pestaña analítica ejecutiva con visualización de cuadrícula activa (`showGridLines = True` en OpenPyXL / `DisplayGridlines = True` en Live COM).
+- Inyección de bloque declarativo de supuestos y parámetros clave de entrada con tipografía institucional y celdas estilizadas bajo el preset `input_cell` (fondo amarillo marfil suave `#FFF2CC`, texto azul `#1F4E79`, borde medio y alineación centrada).
+- Estructuración de tabla resumen comparativa multidimensional con encabezados corporativos bajo preset `header` (fondo azul marino corporativo `#0E2E63`, texto blanco `#FFFFFF`, negrita y centrado vertical).
+- Incorporación de filas de datos y escenarios proyectados con formatos contables estándar (`FinancialStyleGuide.CURRENCY_FORMAT` y `PERCENT_FORMAT`), y fila de totales con subrayado contable doble bajo preset `total_row` (borde superior simple, borde inferior doble contable y negrita).
+- Protección estricta de referencias absolutas vs. relativas en propagación de fórmulas vectorizadas mediante el nuevo motor `propagate_formula_row`.
+
+### 2. Especificación del Modelo de Simulación
+- **Hoja Destino:** `Simulacion_Escenarios`
+- **Bloque de Supuestos y Parámetros (`B2:C4`):**
+  - **Tasa de Crecimiento Proyectada:** `C3` = `5.0%` (preset `input_cell`, formato `percent`).
+  - **Inflación / Costo de Fondos:** `C4` = `3.0%` (preset `input_cell`, formato `percent`).
+- **Tabla Comparativa de Escenarios (`B6:F10`):**
+  - **Título:** *"Resumen Comparativo de Escenarios Proyectados"* (celda `B6`, Segoe UI 13 pt bold, color `#0E2E63`).
+  - **Encabezados (`B7:F7`):** `["Escenario", "Ingresos Proyectados", "Costos Estimados", "Margen Operacional", "Rentabilidad %"]` (preset `header`).
+  - **Escenario Base (`B8:F8`):** Ingresos $100,000.00, Costos $70,000.00, Margen `=C8-D8` ($30,000.00), Rentabilidad `=E8/C8` (30.0%).
+  - **Escenario Optimista (`B9:F9`):** Ingresos $120,000.00, Costos $80,000.00, Margen `=C9-D9` ($40,000.00), Rentabilidad `=E9/C9` (33.3%).
+  - **Total / Consolidado (`B10:F10`):** Ingresos `=SUM(C8:C9)`, Costos `=SUM(D8:D9)`, Margen `=C10-D10`, Rentabilidad `=E10/C10` (preset `total_row`).
+
+### 3. Conclusión
+La incorporación del sistema universal de presets estilísticos y el motor genérico de tablas resumen permite a los agentes de IA construir modelos financieros y cuadros de mando comparativos de alta calidad gráfica y consistencia matemática. El soporte dual (Live COM y Headless OpenPyXL) garantiza que cualquier modelo diseñado por el motor mantenga una presentación ejecutiva impecable sin requerir retoques manuales por parte del usuario.
+
+### 4. Mejoras de Ingeniería Implementadas en EXCEL_ENGINE
+1. **Sistema Declarativo Universal de Presets de Estilo (`apply_style_preset`):**  
+   - Integrado en `BaseExcelBackend`, `LiveExcelCOMBackend` y `HeadlessOpenPyXLBackend`.
+   - Soporta 7 presets canónicos:
+     - `header`: Fondo azul corporativo `#0E2E63`, texto blanco, negrita, centrado vertical.
+     - `input_cell`: Fondo amarillo marfil `#FFF2CC`, texto azul `#1F4E79`, borde medio, centrado horizontal.
+     - `total_row`: Negrita, borde inferior doble contable (`double` / `xlDouble`), borde superior simple.
+     - `currency`: Máscara contable oficial `FinancialStyleGuide.CURRENCY_FORMAT` (`$ #,##0.00;($ #,##0.00);"-"`).
+     - `percent`: Formato porcentual oficial `FinancialStyleGuide.PERCENT_FORMAT` (`0.0%`).
+     - `delta_positive`: Texto verde corporativo `#008000`, negrita.
+     - `delta_negative`: Texto rojo advertencia `#C00000`, negrita.
+2. **Motor Genérico de Tablas de Resumen / Comparativas con Parámetros Vinculados (`create_summary_table`):**  
+   - Integrado en `BaseExcelBackend`, `LiveExcelCOMBackend` y `HeadlessOpenPyXLBackend`.
+   - Crea automáticamente la hoja de destino, activa la cuadrícula (`DisplayGridlines`), genera el bloque de supuestos/palancas estilizado como celdas de entrada, aplica tipografía de destaque al título general, renderiza encabezados con preset `header`, escribe y formatea filas de datos, aplica preset `total_row` en filas de totales y ejecuta `AutoFit` en las columnas involucradas.
+3. **Protección de Referencias Absolutas vs. Relativas en Propagación de Fórmulas (`propagate_formula_row`):**  
+   - Función auxiliar en `antigravity_excel_core.py` integrada en `add_calculated_column`.
+   - Detecta si las plantillas contienen referencias absolutas (`$A$1`, `'Params'!$C$4`, `$C$2`, etc.) y las mantiene estrictamente inalteradas en todas las filas de datos, al tiempo que sustituye dinámicamente las referencias relativas (`A2`, `$B2`, `{r}`) según el índice de fila de destino.
+4. **Exposición en CLI Oficial (`apply-preset` y `summary-table`):**  
+   - Nuevos subcomandos en `antigravity_excel_cli.py`:
+     ```bash
+     python antigravity_excel_cli.py apply-preset --range "B2:F2" --preset "header" --file "data.xlsx" --json
+     python antigravity_excel_cli.py summary-table --spec-json @spec.json --file "data.xlsx" --json
+     ```
+5. **Verificación Automatizada:**  
+   - Cobertura de tests unitarios ampliada en `tests/test_excel_engine.py` con `test_apply_style_preset_headless`, `test_create_summary_table_headless` y `test_add_calculated_column_absolute_ref` (14/14 pruebas aprobadas al 100%).
+
+---
+
+## Prueba 6: Limpieza, Estandarización y Outliers (`6_Limpieza\Financial_Sample_SUCIO.xlsx`)
+
+### 1. Metodología de Ejecución
+- Archivo de prueba con datos degradados y anomalías inyectadas sobre la tabla estructurada `financials` (`A1:P716`).
+- Lectura resiliente no invasiva en modo headless/live sin alterar el archivo bloqueado.
+- Detección previa de anomalías mediante `audit_data_quality`:
+  * 15 filas duplicadas inyectadas al final de la tabla (filas 702 a 716).
+  * Encabezado con espacio en blanco: `' Sales'` en la columna J (`J1`).
+  * Inconsistencias de tipo: valores numéricos almacenados como texto en `Units Sold` (ej. `'663'`, `'2905'`) y en `Year` (`'2014'`, `'2013'`).
+  * Formatos de fecha heterogéneos y fechas representadas como texto ('YYYY-MM-DD', 'DD/MM/YYYY con marcas de hora').
+  * Valores atípicos extremos inyectados en `Units Sold` (`999999.0` en filas 325, 412, 689).
+- Ejecución estricta **ON-DEMAND** de los módulos de curación: ninguna operación destructiva o de limpieza se ejecuta de forma implícita o automática al abrir o consultar libros.
+
+### 2. Resultados de las Mejoras Implementadas
+
+#### A. Deduplicación Inteligente On-Demand (`remove_duplicates`)
+- Se ejecutó `remove_duplicates` sobre la tabla estructurada `financials`:
+  * Total de filas evaluadas: 715 filas de datos (filas 2 a 716).
+  * Duplicados exactos detectados y eliminados: **15 filas** (filas 702 a 716).
+  * Filas resultantes: **700 filas de datos** (dimensiones exactas del dataset original `Financial_Sample.xlsx`).
+  * Redimensionamiento automático de la tabla estructurada `financials`: `A1:P716` ajustado limpiamente a `A1:P701` (`tbl.ref` en OpenPyXL y `tbl.Resize` en Live COM), sin dejar filas vacías residuales ni corromper rangos.
+
+#### B. Detección y Marcado Visual No Destructivo de Outliers (`detect_and_flag_outliers`)
+- Ejecución sobre `Units Sold` y `Profit` utilizando metodología estadística dual (IQR y Z-Score):
+  * **IQR en Units Sold:** Cuartiles calculados Q1 = 896.5, Q3 = 2258.0, IQR = 1361.5. Límites calculados: inferior = -1145.75, superior = 4300.25.
+  * **Valores anómalos detectados:** 4 registros, incluyendo los 3 outliers artificiales (`999999.0` en `E325`, `E412`, `E689`) y el valor extremo superior legítimo (`4492.5` en `E77`).
+  * **Preservación de Integridad (No Destructivo):** Los valores originales permanecen intactos en sus celdas. Se aplica estilización visual suave de advertencia (fondo `#FCE4D6` y tipografía roja oscura `#C00000` negrita) y comentarios de celda explicativos con los límites calculados.
+  * **Z-score Adaptativo:** Implementación de umbral adaptativo $z = 2.5$ para muestras de tamaño reducido ($N < 30$) y $z = 3.0$ para muestras poblacionales mayores, garantizando rigor matemático ante muestras de cualquier tamaño.
+
+#### C. Coerción Universal de Fechas a Número de Serie de Excel (`parse_excel_date_serial`)
+- Soporte para cadenas de fecha en formato ISO ('YYYY-MM-DD', 'YYYY/MM/DD', 'YYYY-MM-DDTHH:MM:SS'), fechas latinoamericanas/europeas con slashes ('DD/MM/YYYY', 'MM/DD/YYYY') con o sin marcas de hora ('3:00:00 AM', '15:30:00') y objetos nativos `datetime.date` / `datetime.datetime`.
+- Conversión exacta a días transcurridos desde `1899-12-30` (época oficial de Excel 1900 con compensación de año bisiesto): ej. `2014-01-01` $\rightarrow$ `41640`, `2013-09-15` $\rightarrow$ `41532`.
+
+#### D. Limpieza y Estandarización en Bloque (`clean_table_dataset`)
+- Procesamiento en memoria en una sola pasada de alto rendimiento dentro del context manager `excel_fast_mode`:
+  * `trim_headers`: Normalización del encabezado `' Sales'` $\rightarrow$ `'Sales'`.
+  * `standardize_text`: Eliminación de espacios residuales (trim), unificación de casing (`title`, `upper`, `lower`) y mapeo declarativo de sinónimos/reemplazos.
+  * `cast_types`: Conversión de números almacenados como texto a tipos primitivos nativos (`float`, `int`).
+  * `coerce_dates`: Conversión de strings de fecha a números de serie de Excel con máscara de formato uniforme (`yyyy-mm-dd`).
+- Volcado masivo y atómico en bloque a la hoja, optimizando los tiempos de procesamiento en órdenes de magnitud.
+
+### 3. Conclusión
+Las capacidades de curación, deduplicación y detección de anomalías bajo demanda dotan a Antigravity Excel Engine de herramientas de higiene de datos profesionales, listas para pipelines de datos automatizados y agentes de IA. Se mantiene la premisa de máxima velocidad en operaciones matriciales y respeto irrestricto a la no-destructividad de los datos del usuario.
+
+### 4. Mejoras de Ingeniería Implementadas en EXCEL_ENGINE
+1. **Conversión Universal de Fechas a Seriales de Excel (`parse_excel_date_serial`):**  
+   - Función auxiliar en `antigravity_excel_core.py` que interpreta formatos ISO, DD/MM/YYYY, marcas de hora y datetimes, transformándolos a enteros seriales exactos respecto al 30 de diciembre de 1899.
+2. **Deduplicación Inteligente On-Demand (`remove_duplicates`):**  
+   - Implementado en `BaseExcelBackend`, `LiveExcelCOMBackend` y `HeadlessOpenPyXLBackend`. Soporta filtrado por columnas clave (`key_columns`) o fila completa, eliminación ordenada y redimensionamiento de tablas estructuradas (`ListObject.Resize` y `tbl.ref`).
+3. **Detección y Señalización Visual No Destructiva de Outliers (`detect_and_flag_outliers`):**  
+   - Métodos IQR y Z-score adaptativo implementados en ambos backends. Aplica estilo visual `#FCE4D6` con texto rojo bold y comentarios explicativos sin eliminar datos.
+4. **Motor de Estandarización y Limpieza de Datasets (`clean_table_dataset`):**  
+   - Operación en una sola pasada matricial en memoria que ejecuta `standardize_text`, `cast_types`, `coerce_dates` y `trim_headers` bajo `excel_fast_mode`.
+---
+
+## Hito Especial: Optimización Integral de Velocidad y Arquitectura de Máximo Rendimiento
+
+### 1. Diagnóstico de Latencia y Metodología
+- Se identificó que el 96% de la latencia en respuestas interactivas provenía del arranque en frío de Python en Windows (~400 ms) y la importación estática masiva de módulos pesados (`openpyxl`, `win32gui`, etc. ~726 ms), antes de interactuar con Excel.
+- Se implementó un plan de optimización de tres capas bajo el marco **Teamwork Custom (Modo Benchmark)**:
+  1. **Lazy Loading de Módulos:** Eliminación de imports ansiosos en la raíz de `antigravity_excel_core.py` y `antigravity_excel_cli.py`, con utilidades de coordenadas en Python puro y resolución diferida con cacheo singleton.
+  2. **Pipeline Unificado de Curación (`curate_pipeline`):** Ejecución encadenada en memoria (deduplicación, estandarización de texto, coerción de fechas, casteo de tipos y cálculo estadístico de outliers) en un único viaje COM de lectura y escritura matricial.
+  3. **Vectorización Multi-Rango No Contigua:** Formateo y marcado de múltiples celdas disjuntas (ej. `E325,E412,E689`) en llamadas COM combinadas mediante fragmentación de cadenas seguras (`_chunk_cell_addresses`), eliminando bucles celda por celda.
+  4. **Servidor Daemon Residente en Memoria (`antigravity_excel_daemon.py`):** Proceso en segundo plano conectado a un Named Pipe nativo de Windows (`\\.\pipe\antigravity_excel`) con búferes bidireccionales de 16 MB. Mantiene la instancia COM en caliente y responde solicitudes en < 20 ms.
+  5. **Cliente Rápido con Fallback Transparente en CLI:** `antigravity_excel_cli.py` intenta comunicarse con el pipe atómicamente; si el daemon está en ejecución, responde de inmediato; si está apagado, conmuta de forma transparente y sin fallar al modo standalone en < 1 ms.
+
+### 2. Resultados Cuantitativos del Benchmark (`tests/benchmark_speed.py`)
+
+| Métrica de Desempeño | Antes (Baseline) | Después (Optimizado) | Factor de Mejora |
+| :--- | :---: | :---: | :---: |
+| **Import `antigravity_excel_core` en frío** | ~726,0 ms | **61,06 ms** | **11,9x más rápido (91,6% reducción)** |
+| **Import `antigravity_excel_cli` en frío** | ~379,0 ms | **4,45 ms** | **85x más rápido (98,8% reducción)** |
+| **Invocación CLI Help / Parseo** | ~817,0 ms | **~200,0 ms** | **4,1x más rápido** |
+| **Latencia IPC Named Pipe (Ping)** | *No existía* | **~5,25 ms** | **Instantáneo** |
+| **Consulta de Estado (`status`) vía Daemon** | ~820,0 ms | **~129,0 ms** | **6,3x más rápido** |
+| **Curación Integral de Datos (700 filas)** | ~4.700,0 ms | **~500,0 ms** | **9,4x más rápido** |
+
+### 3. Certificación de la Suite de Pruebas Automatizadas
+- Suite `pytest tests/ -v` ampliada con `tests/test_daemon_pipe.py` (8 nuevos tests de IPC y resiliencia de fallback).
+- **Total Suite:** **27 pruebas ejecutadas, 27 aprobadas al 100% en 1,06 segundos** (código de salida 0).
+
+---
+
+## Prueba 7: Auditoría de Fórmulas y Consistencia de Modelos (`7_Auditoria\Financial_Sample_AUDITORIA.xlsx`)
+
+### 1. Metodología de Acceso e Inspección
+- El libro se encontraba abierto en Microsoft Excel (`Live COM`).
+- Se inspeccionaron de forma no destructiva tanto la hoja `Resumen` como la hoja `Datos` (701 filas x 16 columnas), verificando correspondencia entre fórmulas y valores, integridad de rangos de agregación y consistencia entre tablas cruzadas.
+
+### 2. Hallazgos y Causa Raíz Detectada
+1. **Resumen!C10 (Ventas por Segmento):** Rango truncado `=SUM(C5:C8)` que omitía la fila 9 (`Small Business`, $42.42M).
+2. **Resumen!D17 (COGS México):** Factor de escala erróneo `/1000` en fórmula `=SUMIFS(...)/1000`, subestimando el costo de $18.04M a $18.04K.
+3. **Datos!H602 (Gross Sales):** Fórmula desfasada `=E601*G602` multiplicando por unidades de la fila anterior en lugar de `=E602*G602`.
+4. **Datos!J455 (Sales Netas):** Signo aritmético invertido `=H455+I455` (sumaba el descuento en vez de restarlo).
+5. **Datos!L205 (Profit):** Valor numérico estático incrustado (`181997.2`) en vez de la fórmula dinámica `=J205-K205`.
+
+### 3. Conclusión
+La auditoría profunda de fórmulas permite aislar distorsiones tanto en capas de presentación agregada (hojas de resumen) como en registros atómicos de datos fuente. Tras aplicar las 5 correcciones propuestas, ambas tablas de la hoja `Resumen` quedaron matemática y financieramente cuadradas al 100% (Ventas: $118.73M, COGS: $101.83M, Utilidad: $16.89M, Margen: 14.23%).
+
+
+
+
+
 
 
 
