@@ -1,6 +1,6 @@
 # Antigravity Excel Engine
 
-> **The Enterprise-Grade, AI-Native Excel Automation Engine for Autonomous Agents and Data Pipelines.**
+> **AI-Native Excel Automation Engine for Autonomous Agents and Data Pipelines.**
 
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
