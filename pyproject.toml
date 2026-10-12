@@ -19,6 +19,12 @@ dependencies = [
     "pywin32>=306; sys_platform == 'win32'"
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["antigravity_excel_engine*"]
+exclude = ["PRUEBAS*", "tests*"]
+
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
