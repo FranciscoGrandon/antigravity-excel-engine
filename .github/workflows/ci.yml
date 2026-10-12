@@ -1,0 +1,51 @@
+# Creado por Francisco Grandón Vergara
+name: Windows CI - Quality & Tests
+
+on:
+  push:
+    branches: [ main, develop, "feature/**", "fix/**" ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .[dev]
+
+      - name: Run linting with Ruff
+        run: |
+          python -m ruff check antigravity_excel_engine/
+
+      - name: Run type checking with mypy
+        run: |
+          python -m mypy antigravity_excel_engine/ --ignore-missing-imports
+
+      - name: Run pytest with Coverage
+        run: |
+          python -m pytest tests/ --cov=antigravity_excel_engine --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: coverage-report
+          path: coverage.xml

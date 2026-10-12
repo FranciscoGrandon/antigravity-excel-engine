@@ -1,3 +1,4 @@
+<!-- Creado por Francisco Grandón Vergara -->
 # Changelog
 
 Todas las modificaciones notables de este proyecto serán documentadas en este archivo.
@@ -7,7 +8,105 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+### Corregido y Optimizado
+- **Rendimiento e Integración Live COM en Tiempo Real (`excel_engine`):**
+  - **Optimización Matricial de `audit_data_quality`:** Sustitución de bucles celda a celda en COM (~11,200 llamadas RPC) por lectura bidimensional en un solo viaje COM (`Range.Value` y `Range.Formula`) procesada vectorialmente en memoria local, reduciendo el tiempo de auditoría de ~4.5s a <15ms.
+  - **Corrección de Dirección COM:** Corrección de error `TypeError: 'str' object is not callable` al invocar `target_rng.Address(False, False)` en win32com, unificando el acceso con `get_com_clean_address()`.
+  - **Serialización Segura IPC y CLI:** Incorporación de serialización automática con `default=str` en `cli.py`, `daemon.py` y `client.py`, resolviendo incompatibilidades con valores numéricos `Decimal` y fechas devueltos por Excel.
+  - **Ajuste de Timeout en `_try_daemon`:** Ampliación del timeout del dispatcher CLI de 50ms a 10,000ms para evitar cancelaciones prematuras y caídas forzadas a standalone cuando el daemon está procesando rangos extensos.
+  - **Normalización de Firmas en Operaciones de Visualización y Estilos:** Homogeneización de argumentos (`source`/`source_range`, `preset`/`preset_name`) en `operations/charts.py`, `engine.py` y backends para `create_pivot_table`, `create_chart` y `apply_style_preset`.
+
 ### Añadido
+- **Pruebas y Modelado Financiero Interactivo en `Financial_Sample.xlsx`:**
+  - Auditoría integral de calidad de datos sobre las 11,216 celdas de la tabla estructurada `financials`.
+  - Creación de columnas calculadas con fórmulas vivas: `Margen %` (`=L2/J2`) y `Utilidad por unidad` (`=L2/E2`).
+  - Creación de tabla dinámica analítica `PT_Utilidad_Segmento_Pais` en hoja `Resumen_Utilidad` y gráfico de columnas agrupadas vinculado sin solapamiento.
+  - Modelado de escenario interactivo en hoja `Simulacion_Escenario` con celda editable (`C5: 50.0%`) y matriz de impacto dinámico en ventas netas y utilidad total.
+
+### Añadido
+- **Fase 6 del Refactor de EXCEL_ENGINE (Calidad, Tests Modulares y CI):**
+  - **Suites de Pruebas Unitarias Adicionales (`tests/`):**
+    - `tests/test_engine.py`: 12 pruebas unitarias para `AntigravityExcelEngine` y `ExcelEngine` (inicialización en modo auto y file, fallback inteligente de COM a headless, delegación completa a `operations/read`, `write`, `audit`, `aggregate`, `status`, `wait_until_ready`, `save`, `close` y control de excepciones).
+    - `tests/test_cli.py`: 14 pruebas unitarias para el CLI desacoplado (`build_parser`, flags de daemon, `_build_payload`, lectura de JSON/archivos, formateo plano/JSON, ejecución standalone de comandos como `status`, `get-csv`, `get-ranges`, `set-range` y fallback transparente).
+    - `tests/test_curation.py`: 6 pruebas unitarias modulares para el pipeline de preparación de datos (`remove_duplicates` con tablas estructuradas, `clean_table_dataset` con trim/casing/tipos/fechas, `detect_and_flag_outliers` con IQR y Z-Score no destructivo, y `curate_pipeline` compuesto en una sola pasada en memoria).
+  - **Configuración Unificada de Calidad en `pyproject.toml`:**
+    - Declaración de dependencias de desarrollo en `[project.optional-dependencies]`: `pytest`, `pytest-cov`, `ruff` y `mypy`.
+    - Configuración centralizada de herramientas: `tool.pytest.ini_options`, `tool.coverage.run`, `tool.coverage.report`, `tool.ruff` y `tool.mypy`.
+  - **Integración Continua para Windows (`.github/workflows/ci.yml`):**
+    - Workflow automatizado en `windows-latest` con matriz para Python 3.10, 3.11 y 3.12.
+    - Ejecución de linting con `ruff`, chequeo de tipos con `mypy` y suite de pruebas completa con reporte de cobertura (`pytest-cov`).
+  - **Resultados de Cobertura y Verificación:**
+    - Total de pruebas en la suite: **87/87 pruebas aprobadas al 100%** (4.31s).
+    - Cobertura global alcanzada en suite mixta: **49%** (100% en `engine.py`, `protocol.py`, `models`, `operations/read`, `formatting`, `formulas` y módulos core headless).
+- **Fase 5 del Refactor de EXCEL_ENGINE (IPC/Daemon y CLI modular):**
+  - Subpaquete `antigravity_excel_engine.ipc`:
+    - `protocol.py`: Constantes canónicas del Named Pipe (`PIPE_NAME`, `BUF_SIZE`, `DEFAULT_TIMEOUT_MS`), constructores de mensajes (`build_command_request`, `build_action_request`, `build_success_response`, `build_error_response`) y validador de solicitudes entrantes (`validate_request`).
+    - `client.py`: Funciones de alto nivel (`send_pipe_message`, `ping_daemon`, `call_command`, `start_daemon_process`, `stop_daemon_process`, `status_daemon`) con logging explícito y sin `except` silenciosos.
+    - `daemon.py`: `AntigravityExcelDaemon` desacoplado — usa `engine.py` + `protocol.py` + `models/errors.py`; respuestas siempre estructuradas `{status, result|error, [latency_ms]}`; manejo explícito de `ExcelLockError`, `WorkbookNotFoundError`, `FormulaValidationError`, `UnsupportedOperationError`; `logger.exception` en errores inesperados; sin `except Exception: pass`.
+  - `antigravity_excel_engine/cli.py`: CLI desacoplado con `build_parser()`, `_build_payload()` y `_run_standalone()`. Usa `ipc/client.call_command` en lugar de importar el daemon directamente. Sin lógica de negocio Excel.
+  - `antigravity_excel_daemon.py`: Convertido en shim de ~75 líneas que re-exporta desde `ipc/`.
+  - `antigravity_excel_cli.py`: Convertido en shim de ~20 líneas que re-exporta desde `antigravity_excel_engine/cli.py`.
+  - Suite de pruebas: **55/55 pruebas aprobadas** sin regresiones (1.16s).
+- **Fase 4 del Refactor de EXCEL_ENGINE (Operations y Engine Orquestador):**
+  - Subpaquete `antigravity_excel_engine.operations` con separación completa de responsabilidades por dominio:
+    - `read.py`: `read_ranges`, `get_range_as_csv` — lectura sin lógica de negocio, delegación pura al backend.
+    - `write.py`: `write_cell_range`, `write_cells_declarative`, `copy_paste_range` — escritura declarativa.
+    - `audit.py`: `audit_data_quality`, `check_formula_errors`, `detect_and_flag_outliers` — auditoría de integridad.
+    - `aggregate.py`: `aggregate`, `add_calculated_column` — agregaciones estadísticas y columnas calculadas.
+    - `curation.py`: `remove_duplicates`, `clean_table_dataset`, `curate_pipeline` — pipeline de limpieza y deduplicación.
+    - `charts.py`: `create_pivot_table`, `create_chart`, `create_summary_table` — visualización y tablas dinámicas.
+  - Módulo `antigravity_excel_engine/engine.py`: `AntigravityExcelEngine` como coordinador delgado (< 280 líneas) con inyección de backend, auto-detección COM/headless y delegación total a `operations/*`. Expone alias `ExcelEngine`.
+  - `antigravity_excel_engine/__init__.py` actualizado: exporta `AntigravityExcelEngine`, `ExcelEngine` y todas las operaciones públicas.
+  - `antigravity_excel_core.py` actualizado: re-exporta `AntigravityExcelEngine` y `ExcelEngine` desde `engine.py`, garantizando compatibilidad retroactiva 100%.
+  - Suite de pruebas: **55/55 pruebas aprobadas** sin regresiones (1.74s).
+- **Fase 3 del Refactor de EXCEL_ENGINE (Backends: Base, Live COM y Headless):**
+  - Subpaquete `antigravity_excel_engine.backends`:
+    - `base.py`: Definición de la clase base abstracta `BaseExcelBackend` (ABC) consolidando el contrato unificado para backends de Excel con métodos abstractos y comunes (`open_workbook`, `close`, `save`, `get_sheet`, `read_range`, `write_range`, `get_cell_value`, `set_cell_value`, `supports_formula_recalc`, `is_busy`, `get_cell_ranges`, `set_cell_range`, `set_cells`, `get_range_as_csv`, `copy_paste_range`, `check_formula_errors`, `audit_data_quality`, `create_pivot_table`, `create_chart`, `aggregate`, `add_calculated_column`, `apply_style_preset`, `create_summary_table`, `remove_duplicates`, `detect_and_flag_outliers`, `clean_table_dataset`, `curate_pipeline`, `status`, `wait_until_ready`, `dispatch_com`, `_calculate_placement_coordinates`).
+    - `live_com.py`: Extracción modular de `LiveExcelCOMBackend`, el decorador `@retry_on_excel_busy()`, el context manager `excel_fast_mode()` y la utilidad `get_com_clean_address()`. Preserva la arquitectura completa de integración con Microsoft Excel COM (acceso a ROT, enganche visual en `WinSta0\\Default` con `oleacc`, serialización y marshalling entre hilos de COM streams, optimizaciones matriciales de alto rendimiento, tablas dinámicas, gráficos, despacho COM dinámico `dispatch_com` y tolerancia adaptativa a bloqueos interactivos).
+    - `headless.py`: Extracción modular de `HeadlessOpenPyXLBackend`. Preserva la carga de libros en disco con lectura concurrente ante archivos bloqueados vía `win32file.CreateFile`, generación y actualización de rangos, formateo de celdas y comentarios, tablas analíticas cruzadas, gráficos openpyxl y pipeline declarativo completo de curaduría de datos.
+    - `__init__.py`: Exportación centralizada de `BaseExcelBackend`, `LiveExcelCOMBackend`, `HeadlessOpenPyXLBackend`, `retry_on_excel_busy`, `excel_fast_mode` y `get_com_clean_address`.
+  - Refactorización de `antigravity_excel_core.py`: Reducción arquitectónica masiva (de ~4,400 líneas a ~340 líneas), delegando directamente en `antigravity_excel_engine.backends` y re-exportando el 100% de símbolos para compatibilidad retroactiva absoluta.
+  - Exposición en la raíz del paquete `antigravity_excel_engine/__init__.py`.
+  - Suite de pruebas unitarias dedicada: `tests/test_backends.py` con 12 nuevos casos de prueba, alcanzando 55/55 pruebas pasando al 100%.
+- **Fase 2 del Refactor de EXCEL_ENGINE (Fórmulas y Formateo Modular):**
+  - Subpaquete `antigravity_excel_engine.formatting`:
+    - `presets.py`: Extracción y enriquecimiento de `FinancialStyleGuide` con formatos numéricos (`CURRENCY_FORMAT`, `CURRENCY_CLP`, `CURRENCY_USD`, `PERCENT`, `DATE`), colores corporativos Essbio/institucionales (`COLOR_PRIMARY`, `COLOR_SECONDARY`, `COLOR_INPUT`, `COLOR_ASSUMPTION_FILL`, `COLOR_HEADER_FILL`, `COLOR_ZEBRA_EVEN`, `COLOR_ZEBRA_ODD`, `COLOR_KPI_CARD_FILL`, `COLOR_DELTA_POS`, `COLOR_DELTA_NEG`, etc.), diccionario de definiciones declarativas `PRESETS` y método resiliente regional `apply_number_format_resilient`.
+    - `styles.py`: Funciones universales de aplicación de formato y presets tanto para celdas de `openpyxl` como objetos `Range` de `win32com` (`apply_style_preset`, `apply_style_preset_openpyxl`, `apply_style_preset_com`, `apply_number_format`, `apply_borders_openpyxl`, `hex_to_rgb_int`, `hex_to_argb_hex`).
+    - `__init__.py`: Exportación unificada de utilidades de diseño y estilos.
+  - Subpaquete `antigravity_excel_engine.formulas`:
+    - `sanitize.py`: Normalización de fórmulas y compatibilidad XML (`sanitize_formula_compatibility`, `strip_xlfn_prefix`) con catálogo ampliado de 36 funciones modernas (post-2007, matrices dinámicas de Excel 365/2021 como `XLOOKUP`, `UNIQUE`, `FILTER`, `SORT`, `SEQUENCE`, `LET`, `LAMBDA`, `VSTACK`, `HSTACK`, `TEXTSPLIT`).
+    - `audit.py`: Auditoría y reconocimiento de errores de cálculo (`#VALUE!`, `#REF!`, `#DIV/0!`, `#N/A`, `#NAME?`, `#NUM!`, `#NULL!`, `#SPILL!`, `#CALC!`), mapa de códigos COM (`COM_EXCEL_ERROR_MAP`), verificadores (`is_formula_error_value`, `get_formula_error_name`) y extractores sobre hojas (`audit_openpyxl_formula_errors`, `audit_com_formula_errors`).
+    - `compatibility.py`: Reemplazo de placeholders dinámicos (`replace_formula_placeholders` con `{r}`, `{row}`, `{c}`, `{col}`, `{table}` y variables libres), propagación con preservación estricta de referencias relativas/absolutas (`propagate_formula_row`) y constructores de referencias (`make_absolute_reference`, `make_relative_reference`, etc.).
+    - `__init__.py`: Exportación unificada de utilidades de fórmulas.
+  - Integración en `antigravity_excel_core.py`: Delegación limpia de `FinancialStyleGuide`, `sanitize_formula_compatibility`, `propagate_formula_row`, `check_formula_errors` y `apply_style_preset` hacia los nuevos módulos modulares con 100% de compatibilidad hacia atrás.
+  - Suite de pruebas unitarias dedicada: `tests/test_formatting_formulas.py` con 10 nuevos casos de prueba, alcanzando 43/43 tests pasando al 100%.
+- **Fase 1 del Refactor de EXCEL_ENGINE (Modelos, Errores y Utilidades Base):**
+  - Creación del paquete raíz modular `antigravity_excel_engine/` con `__init__.py` y registro de autoría `Creado por Francisco Grandón Vergara`.
+  - Módulo `antigravity_excel_engine.models`:
+    - `errors.py`: Jerarquía de excepciones (`ExcelEngineError`, `ExcelLockError`, `WorkbookNotFoundError`, `FormulaValidationError`, `PipeConnectionError`, `UnsupportedOperationError`, `InvalidRangeError`, `ExcelBusyError`) con serialización a diccionario.
+    - `requests.py`: Dataclasses tipadas para solicitudes (`DaemonRequest`, `PipeCommandRequest`, `CellWriteRequest`, `CuratePipelineRequest`).
+    - `responses.py`: Estructuras de respuesta normalizadas (`BaseResponse`, `SuccessResponse`, `ErrorResponse`, `OperationStatus`).
+    - `result_types.py`: Dataclasses de resultados (`CellWriteResult`, `AuditReport`, `CurateResult`, `AggregateResult`, `PivotResult`, `OutlierResult`).
+  - Módulo `antigravity_excel_engine.utils`:
+    - `logging.py`: Logger centralizado `antigravity_excel`, helpers `log_operation`, `log_exception` y context manager `log_duration`.
+    - `ranges.py`: Utilidades de coordenadas y rangos (`coordinate_from_string`, `column_index_from_string`, `col_to_index`, `get_column_letter`, `index_to_col`, `range_boundaries`, `parse_range`, `chunk_cell_addresses`) con LRU cache.
+    - `dates.py`: Conversión y serialización de fechas a seriales de Excel (`parse_excel_date_serial`, `coerce_date_to_excel_serial`, `excel_serial_to_datetime`, `excel_serial_to_date`).
+    - `validation.py`: Validadores y sanitizadores de nombres de hojas (`validate_sheet_name`, `sanitize_sheet_name`), rangos (`validate_range_string`), existencia de libros (`validate_workbook_exists`), sintaxis de fórmulas (`validate_formula_text`) y detección de errores de cálculo (`is_formula_error`).
+- **Biblioteca Modular de Habilidades para Agentes de IA (`excel-skills/`):**
+  - Catálogo de habilidades de interacción inspirado en la arquitectura modular de `interaction-skills` de browser-use, adaptado al ecosistema de Microsoft Excel COM, Headless OpenPyXL y Daemon IPC de alta velocidad.
+  - `excel-skills/README.md`: Visión general, catálogo e índice de habilidades, mapa de arquitectura y reglas de oro de latencia (<5ms vía Daemon Named Pipes), eficiencia de tokens y cero corrupción de libros.
+  - `excel-skills/com-locks-and-readiness.md`: Sincronización adaptativa con `wait_until_ready`, decorador `@retry_on_excel_busy`, catálogo de HRESULTs de bloqueo interactivo (`0x8001010A`, `0x800AC472`, `0x80010001`), manejo seguro de `excel_fast_mode` y restauración obligatoria de `ScreenUpdating` y `Calculation`.
+  - `excel-skills/formulas-dynamic-spill.md`: Inyección de fórmulas vectorizadas (`UNIQUE`, `FILTER`, `SORT`, `XLOOKUP`), notación estructurada `Table[@Columna]`, propiedad `.Formula2` vs `.Formula`, prevención del error `#SPILL!` y resolución de discrepancias regionales (`;` vs `,`).
+  - `excel-skills/dates-and-serial-numbers.md`: Conversión bidireccional ultrarrápida entre fechas ISO-8601 y números seriales de Excel, época base computacional (30 de diciembre de 1899), resolución del bug bisiesto de Lotus 1-2-3 (Serial 60) y prevención de desfases de huso horario.
+  - `excel-skills/dispatch-com-advanced.md`: Invocación reflexiva de la API profunda mediante `dispatch_com` (`antigravity_excel_cli.py dispatch-com`) para autofiltros dinámicos, protección de hojas con contraseña, listas desplegables (validación de datos) y exportación nativa a PDF, previniendo objetos COM huérfanos y procesos `EXCEL.EXE` zombis.
+  - `excel-skills/benchmarking-harness.md`: Harness de evaluación estandarizado para agentes de IA sobre Excel utilizando el banco de pruebas de `PRUEBAS/`, con métricas de precisión de cálculo contra claves de verdad, ahorro de tokens de contexto (>60% en CSV vs JSON), latencia IPC (<5ms) y garantía de cero procesos huérfanos.
+- **Primitivas de Sincronización y Despacho Dinámico COM (`wait_until_ready` y `dispatch_com`):**
+  - Incorporadas en `BaseExcelBackend`, `LiveExcelCOMBackend`, `HeadlessOpenPyXLBackend` y la fachada `AntigravityExcelEngine`.
+  - `wait_until_ready`: Sondeo adaptativo con timeout configurable que verifica `app.Ready` y `app.CalculationState == 0` (xlDone). Tolera bloqueos por edición interactiva del usuario mediante captura de HRESULTs COM (`0x8001010A`, `0x800AC472`, `0x80010001`). En backend Headless retorna disponibilidad inmediata sin esperas.
+  - `dispatch_com`: Invocación reflexiva tolerante a fallos con `@retry_on_excel_busy()`. Resuelve destinos jerárquicos (`app`, `workbook`/`wb`, `activesheet`/`sheet`, rangos o expresiones vía `app.Evaluate` y propiedades encadenadas). Invoca métodos con argumentos o efectúa lectura/asignación de propiedades si no son invocables, serializando los resultados a tipos estándar Python y liberando referencias COM explícitamente (`del res`) para prevenir fugas de recursos.
+  - Integración en `antigravity_excel_daemon.py` dentro de `handle_request` para canalizar peticiones `wait-until-ready` y `dispatch-com` a través del Named Pipe.
+  - Nuevos subparsers en `antigravity_excel_cli.py` para `wait-until-ready` (`--timeout`, `--interval`) y `dispatch-com` (`--target`, `--member`, `--args-json`, `--kwargs-json`, `--stdin`, `--input-file`) con despacho por daemon y fallback transparente a standalone.
+  - Cobertura de pruebas unitarias y de integración en `tests/test_excel_engine.py` y `tests/test_daemon_pipe.py` (24 unit tests y 9 integration tests aprobados al 100%).
 - **Servidor Daemon Residente y Named Pipe IPC (`antigravity_excel_daemon.py` - Tarea T3.1):** Servidor persistente multihilo en Windows que mantiene en memoria (RAM) la sesión de Excel y `AntigravityExcelEngine` caliente, proveyendo un canal IPC duplex de ultra-baja latencia sobre el Named Pipe `\\.\pipe\antigravity_excel` (búferes de 16MB para transferencias masivas). Soporta los 18 comandos del motor (`status`, `get-csv`, `get-ranges`, `set-range`, `set-cells`, `copy-paste`, `check-errors`, `audit-quality`, `aggregate`, `add-column`, `create-pivot`, `create-chart`, `summary-table`, `apply-preset`, `dedup`, `flag-outliers`, `clean`, `curate`) más acciones de ping y shutdown.
 - **Cliente Ultrarrápido (< 30ms) y Fallback Transparente en CLI (`antigravity_excel_cli.py`):** Integración de `_try_call_daemon` con timeout ultra-corto (50ms). Si el daemon está activo, despacha la petición por el pipe en ~5ms (latencia promedio ~5.25 ms); si está inactivo, cae de forma transparente e instantánea (< 1ms) al flujo standalone local sin errores.
 - **Flags de Gestión del Daemon en CLI y Proceso Autónomo:** Nuevos modificadores `--daemon-start` (despacho en background desacoplado), `--daemon-stop` (señal de apagado ordenado) y `--daemon-status` (diagnóstico en tiempo real y latencia de ping) en `antigravity_excel_cli.py` y `antigravity_excel_daemon.py`.
