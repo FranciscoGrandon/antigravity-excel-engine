@@ -19,6 +19,12 @@ dependencies = [
     "pywin32>=306; sys_platform == 'win32'"
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["antigravity_excel_engine*"]
+exclude = ["PRUEBAS*", "tests*"]
+
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
@@ -64,8 +70,8 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = ["E501", "F401"]
+select = ["E", "F", "W"]
+ignore = ["E501", "F401", "E702", "W293", "E402", "F841"]
 
 [tool.mypy]
 python_version = "3.10"

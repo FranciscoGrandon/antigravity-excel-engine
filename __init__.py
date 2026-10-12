@@ -4,12 +4,20 @@ Antigravity Excel Engine Package.
 The Enterprise-Grade, AI-Native Excel Automation Engine for Autonomous Agents.
 """
 
-from .antigravity_excel_core import (
-    AntigravityExcelEngine,
-    LiveExcelCOMBackend,
-    HeadlessOpenPyXLBackend,
-    retry_on_excel_busy
-)
+try:
+    from .antigravity_excel_core import (
+        AntigravityExcelEngine,
+        LiveExcelCOMBackend,
+        HeadlessOpenPyXLBackend,
+        retry_on_excel_busy,
+    )
+except ImportError:
+    from antigravity_excel_core import (
+        AntigravityExcelEngine,
+        LiveExcelCOMBackend,
+        HeadlessOpenPyXLBackend,
+        retry_on_excel_busy,
+    )
 
 # Aliases de conveniencia
 ExcelEngine = AntigravityExcelEngine

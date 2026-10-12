@@ -4,21 +4,22 @@ Backend Live Excel COM de Antigravity Excel Engine.
 Control en vivo de Microsoft Excel mediante Win32 COM, ROT y hook visual de escritorio (oleacc).
 """
 
-import os
-import re
 import csv
-import time
 import datetime
 import functools
-import threading
+import io
+import os
+import re
 import statistics
+import threading
+import time
 from contextlib import contextmanager
-from typing import List, Dict, Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 try:
-    import win32com.client
     import pythoncom
     import pywintypes
+    import win32com.client
 except ImportError:
     win32com = None
     pythoncom = None
@@ -162,27 +163,30 @@ def get_com_clean_address(excel_range_or_cell) -> str:
         return str(getattr(excel_range_or_cell, "Address", "")).replace("$", "")
 
 
-from .base import BaseExcelBackend
 from antigravity_excel_engine.utils.ranges import (
-    coordinate_from_string,
+    chunk_cell_addresses,
     column_index_from_string,
+    coordinate_from_string,
     get_column_letter,
     range_boundaries,
-    chunk_cell_addresses,
 )
+
+from .base import BaseExcelBackend
+
 _chunk_cell_addresses = chunk_cell_addresses
 
-from antigravity_excel_engine.utils.dates import parse_excel_date_serial
 from antigravity_excel_engine.formatting import (
     FinancialStyleGuide,
-    hex_to_rgb_int,
     apply_style_preset_com,
+    hex_to_rgb_int,
 )
 from antigravity_excel_engine.formulas import (
-    sanitize_formula_compatibility,
     audit_com_formula_errors,
     propagate_formula_row,
+    sanitize_formula_compatibility,
 )
+from antigravity_excel_engine.utils.dates import parse_excel_date_serial
+
 
 class LiveExcelCOMBackend(BaseExcelBackend):
     def __init__(self, file_path: Optional[str] = None):
@@ -380,7 +384,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         start_rng = ws.Range(start_cell)
         row_count = len(values) if values else (len(formulas) if formulas else 0)
         col_count = len(values[0]) if (values and len(values) > 0) else (len(formulas[0]) if (formulas and len(formulas) > 0) else 0)
-        
+
         if row_count == 0 or col_count == 0:
             return {"status": "error", "message": "No data provided"}
 
@@ -491,7 +495,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         inconsistent_types = []
         total_formulas = 0
         total_cells = rng.Count
-        
+
         start_row = rng.Row
         start_col = rng.Column
         rows_cnt = rng.Rows.Count
@@ -1181,7 +1185,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
             }
 
         headers = [str(ws.Cells(start_row, start_col + c - 1).Value or "").strip() for c in range(1, num_cols + 1)]
-        
+
         compare_col_indices = []
         if key_columns:
             headers_lower = [h.lower() for h in headers]
