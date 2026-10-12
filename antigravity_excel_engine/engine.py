@@ -12,32 +12,32 @@ Compatibilidad total con la API pública de antigravity_excel_core.py.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from antigravity_excel_engine.backends import (
     BaseExcelBackend,
-    LiveExcelCOMBackend,
     HeadlessOpenPyXLBackend,
+    LiveExcelCOMBackend,
 )
-from antigravity_excel_engine.utils.logging import get_logger
 from antigravity_excel_engine.operations import (
-    read_ranges,
-    get_range_as_csv,
-    write_cell_range,
-    write_cells_declarative,
-    copy_paste_range,
+    add_calculated_column,
+    aggregate,
     audit_data_quality,
     check_formula_errors,
-    detect_and_flag_outliers,
-    aggregate,
-    add_calculated_column,
-    remove_duplicates,
     clean_table_dataset,
-    curate_pipeline,
-    create_pivot_table,
+    copy_paste_range,
     create_chart,
+    create_pivot_table,
     create_summary_table,
+    curate_pipeline,
+    detect_and_flag_outliers,
+    get_range_as_csv,
+    read_ranges,
+    remove_duplicates,
+    write_cell_range,
+    write_cells_declarative,
 )
+from antigravity_excel_engine.utils.logging import get_logger
 
 logger = get_logger("engine")
 
