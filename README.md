@@ -1,152 +1,275 @@
 # Antigravity Excel Engine
 
-> The Enterprise-Grade, AI-Native Excel Automation Engine for Autonomous Agents and Data Pipelines.
+> AI-native Excel automation engine for autonomous agents, data pipelines, and enterprise reporting.
 
 ![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tech Stack](https://img.shields.io/badge/backend-Win32%20COM%20%2B%20OpenPyXL-orange)
-![Zero Leaks](https://img.shields.io/badge/process-Zero%20Leaks-success)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011%20%7C%2010%20%7C%20Server-lightgrey)
+![Backend](https://img.shields.io/badge/backend-Win32%20COM%20%2B%20OpenPyXL-orange)
 ![Tests](https://img.shields.io/badge/tests-87%2F87%20passed%20(100%25)-brightgreen)
-![IPC Latency](https://img.shields.io/badge/IPC%20Named%20Pipe-<15ms-blueviolet)
+![IPC](https://img.shields.io/badge/daemon-Named%20Pipe%20%3C%205ms-blueviolet)
 
 *Created by Francisco Grandón Vergara*
 
 ---
 
-## 🌍 Resumen / Summary (Español)
-**Antigravity Excel Engine** es un motor de automatización dual (COM + Headless) diseñado específicamente para agentes de Inteligencia Artificial y flujos de datos a nivel empresarial. Resuelve los problemas clásicos de integración con Excel: bloqueos cuando el usuario edita una celda, consumos excesivos de tokens en LLMs, fugas de memoria por procesos huérfanos y lentitud en ejecuciones recurrentes gracias a su arquitectura con **Servidor Daemon Residente**, **Named Pipes IPC**, **Lazy Loading** y **Vectorización Matricial en Memoria**. Ha sido completamente modularizado en el paquete `antigravity_excel_engine` con 87 pruebas unitarias aprobadas al 100%.
+## Overview
 
-## ⚠️ The Problem
+Antigravity Excel Engine is a modular Python toolkit designed to make Excel automation fast, resilient, and agent-friendly. It supports both:
 
-Traditional Excel automation libraries fail when integrated with autonomous AI agents:
-- **Win32 COM Freezes:** If a human user is actively typing in a cell, classic COM scripts crash or freeze with `RPC_E_SERVERCALL_RETRYLATER`.
-- **OpenPyXL Limitations:** It doesn't update the screen in real-time and cannot evaluate complex formulas.
-- **Cold-Start Overhead:** Python process startups and heavy imports (`openpyxl`, `win32gui`) can waste 500–1200ms before doing any real work.
-- **LLM Token Waste:** LLMs waste up to 75% of their token context window when receiving bulky JSON structures instead of optimized data streams.
-- **Zombie Processes:** Failed scripts often leave hidden `EXCEL.EXE` processes running in the background.
+- Live Excel automation through Win32 COM when the workbook is already open
+- Headless file-based workflows using OpenPyXL for automation pipelines and batch processing
 
-## 🚀 The Solution: Antigravity Excel Engine
+The project is optimized for AI agents, autonomous workflows, and operational data tasks where performance, correctness, and low-latency interaction matter.
 
-This engine introduces key innovations for AI-native workflows:
+## Why this project exists
 
-*   **Dual-Core Architecture:** Auto-detects if the target Excel file is currently open. If open, it uses **Live COM** for dynamic recalculation and visual updates (even supports Undo `Ctrl+Z`). If closed, it falls back to **Headless OpenPyXL** for maximum speed.
-*   **Resident Daemon & Named Pipe IPC (`\\.\pipe\antigravity_excel`):** Persistent Windows background service that keeps the Excel COM session warm in RAM. Delivers sub-5ms ping latencies and executes operations up to **85x faster**. Transparent fallback to standalone mode if offline.
-*   **Lazy Loading & Instant Cold Start:** Module imports in cold start dropped from ~726ms to **~57ms** (an ~87% improvement) by deferring non-essential modules and using pure Python cell utilities.
-*   **Unified Data Curation Pipeline (`curate`):** Executes deduplication, text normalization, type casting, date serial coercion, and outlier detection in a **single memory pass** and **single COM trip**, dropping latency from 4.7s to <500ms.
-*   **Token-Optimized CSV Streamer:** Drastically reduces LLM token consumption by packing Excel data into dense, normalized CSV-like outputs instead of verbose JSON.
-*   **Financial Modeling & Preset System:** Declarative style presets (`header`, `input_cell`, `total_row`, `currency`, `percent`, `delta_positive`, `delta_negative`), native pivot tables, non-overlapping chart positioning, and executive summary tables.
-*   **Formula Audit & Self-Healing Guardian:** Native detection of formula errors (`#VALUE!`, `#REF!`, `#DIV/0!`), inconsistent formulas, truncated ranges, and accidental hardcoded values.
+Traditional Excel automation approaches are often too slow or fragile in real-world agent-driven scenarios:
 
-## 🏗 Architecture
+- COM workflows can freeze when Excel is busy or the user is editing a sheet
+- file-based automation is too slow for repeated requests
+- LLMs waste tokens when returning verbose nested JSON instead of compact CSV/structured output
+- repeated imports and startup overhead make agent orchestration expensive
 
-```mermaid
-flowchart TD
-    Agent[Autonomous AI Agent / CLI] --> IPC{Named Pipe Active?\n\\.\pipe\antigravity_excel}
-    
-    IPC -- Yes (< 5ms) --> Daemon[Resident Daemon Engine\nWarm In-Memory Session]
-    IPC -- No (Fallback) --> API[Antigravity Excel Engine API]
-    
-    Daemon --> FastOps[Fast Matrix Operations\nUnified Pipeline & Curation]
-    API --> Detector{Is File Open in Excel?}
-    
-    Detector -- Yes --> COM[Live COM Core\nwin32com.client + oleacc]
-    Detector -- No --> Headless[Headless Core\nOpenPyXL Resilient]
-    
-    COM --> FastOps
-    Headless --> FastOps
-    FastOps --> Output[Token-Optimized Streamer & Formatters]
-    Output --> Agent
+Antigravity Excel Engine solves this with:
+
+- dual backend selection (`live` + `file` / `auto`)
+- resident daemon with Windows Named Pipe IPC
+- compact CSV and structured outputs for AI consumption
+- declarative cell writes and financial style presets
+- formula auditing, data curating and anomaly detection
+- modular package architecture for maintainability
+
+---
+
+## Key capabilities
+
+- Live COM backend for Excel windows already open in the desktop app
+- Headless backend for files and automation pipelines without a visible Excel window
+- Auto backend detection based on runtime conditions
+- Resident daemon IPC for repeated access with low latency
+- Smart reading and writing of ranges, formulas, and styles
+- Structural table creation, pivot tables and charts
+- Data quality audits, deduplication, normalization and outlier flagging
+- Formula sanitization and validation for Excel compatibility
+- CLI entry points for scripts and agent orchestration
+
+---
+
+## Project structure
+
+```text
+antigravity-excel-engine/
+├── antigravity_excel_engine/
+│   ├── backends/
+│   ├── cli.py
+│   ├── engine.py
+│   ├── formatting/
+│   ├── formulas/
+│   ├── ipc/
+│   ├── models/
+│   ├── operations/
+│   ├── utils/
+│   └── __init__.py
+├── antigravity_excel_cli.py
+├── antigravity_excel_core.py
+├── antigravity_excel_daemon.py
+├── docs/
+│   ├── ARCHITECTURE.md
+│   └── EXAMPLES.md
+├── excel-skills/
+│   └── README.md
+├── tests/
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── pyproject.toml
+├── requirements.txt
+├── README.md
+└── .github/
 ```
 
-## ⚡ Quickstart
+---
 
-### Installation
-Clone the repository and install requirements:
+## Installation
+
+### Option 1: install local dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### Python API Usage
+### Option 2: install the package in editable mode
+
+```bash
+pip install -e .
+```
+
+This project targets Python 3.10+ and uses:
+
+- `openpyxl` for headless workbook operations
+- `pywin32` on Windows for live COM integration
+
+---
+
+## Quick start
+
+### Python API
+
 ```python
-# Import from the modern modular package (or legacy antigravity_excel_core)
 from antigravity_excel_engine import AntigravityExcelEngine
 
-# Initialize the engine (auto-detects Live COM vs Headless OpenPyXL)
 engine = AntigravityExcelEngine(mode="auto", file_path="C:/data/report.xlsx")
 
-# 1. Read token-optimized CSV data (reduces LLM context tokens by up to 75%)
-csv_data = engine.get_range_as_csv("A1:D100")
+# Read a range as compact CSV for AI workflows
+csv_data = engine.get_range_as_csv("A1:D20")
 print(csv_data)
 
-# 2. Declarative Atomic Mapping (values, dynamic formulas, hex styles, notes)
+# Write structured cells with styles and formulas
 engine.set_cells({
     "A1": {"value": "Revenue", "cellStyles": {"fontWeight": "bold", "backgroundColor": "#0E2E63", "fontColor": "#FFFFFF"}},
     "B1": {"formula": "=SUM(B2:B10)", "cellStyles": {"numberFormat": "$#,##0"}},
-    "A2": {"value": "Q1 Target", "note": "Generated autonomously by AI Agent"}
+    "A2": {"value": "Q1 Target", "note": "Generated by an AI agent"},
 }, autofit=True)
 
-# 3. Add calculated column with auto-expanding structured table
-engine.add_calculated_column(
-    header="Total Margin",
-    formula="=[@Sales]-[@COGS]",
-    number_format="$#,##0.00"
-)
-
-# 4. Audit formula errors (#VALUE!, #REF!, #DIV/0!)
+# Audit formulas and values
 errors = engine.check_formula_errors("A1:D100")
-print("Detected errors:", errors)
+print(errors)
 
-# 5. Save changes
+# Save workbook
 engine.save()
 ```
 
-### High-Speed Resident Daemon (Windows IPC)
-```bash
-# Start resident daemon in the background
-python antigravity_excel_daemon.py --start
+### Advanced operations
 
-# Check daemon health & ping latency (< 5ms)
-python antigravity_excel_daemon.py --status
+```python
+from antigravity_excel_engine import AntigravityExcelEngine
 
-# Any CLI command automatically routes through the pipe at blazing speed
-python antigravity_excel_cli.py status --json
-python antigravity_excel_cli.py get-csv "A1:F20" --sheet "Resumen" --json
+engine = AntigravityExcelEngine(mode="auto", file_path="financials.xlsx")
 
-# Stop the daemon when done
-python antigravity_excel_daemon.py --stop
+summary = engine.aggregate(
+    range_str="A1:F200",
+    group_by_col="Segment",
+    metric_col="Sales",
+    agg_func="sum",
+    top_n=10,
+)
+print(summary)
+
+engine.create_pivot_table(
+    source_range="A1:F200",
+    rows=["Segment"],
+    value_field="Sales",
+    value_func="sum",
+    dest_sheet="PivotSummary",
+    dest_cell="A3",
+)
+
+engine.create_chart(
+    source_range="PivotSummary!A3:B10",
+    chart_type="column_clustered",
+    title="Sales by Segment",
+    dest_sheet="Charts",
+)
+
+engine.save()
 ```
 
-### CLI Command Highlights
+---
+
+## CLI usage
+
+The project exposes a modular CLI for daemon and direct execution.
+
+### Show help
+
 ```bash
-# Audit data hygiene & formula errors
-python antigravity_excel_cli.py audit-quality "A1:P700" --sheet Datos --json
-
-# Unified curation pipeline (Dedup + Clean + Outliers in 1 pass)
-python antigravity_excel_cli.py curate --source "A1:P700" --spec-json "{...}" --json
-
-# Create native pivot table
-python antigravity_excel_cli.py create-pivot --source "A1:P700" --rows Segment --value-field Sales --dest-sheet "PivotSummary"
-
-# Insert smart non-overlapping statistical chart
-python antigravity_excel_cli.py create-chart --source "PivotSummary!A3:B8" --chart-type column_clustered --title "Sales by Segment"
+python antigravity_excel_cli.py --help
 ```
 
-## 📊 Feature Comparison
+### Daemon lifecycle
 
-| Feature | Antigravity Excel Engine | xlwings | openpyxl | Pure win32com |
-| :--- | :---: | :---: | :---: | :---: |
-| **Resident Daemon IPC (< 5ms)** | ✅ | ❌ | ❌ | ❌ |
-| **AI Token Optimization (CSV)** | ✅ | ❌ | ❌ | ❌ |
-| **Dual-Core (Live + Headless)** | ✅ | ❌ | ✅ (Headless only) | ❌ (Live only) |
-| **Lazy Loading Architecture** | ✅ | ❌ | ❌ | ❌ |
-| **Self-Healing COM Locks** | ✅ | ❌ | N/A | ❌ |
-| **Unified 1-Pass Data Curation** | ✅ | ❌ | ❌ | ❌ |
-| **Formula Audit & Anomaly Detection** | ✅ | ❌ | ❌ | ❌ |
-| **Smart Non-Overlapping Charts** | ✅ | ❌ | ⚠️ (Manual) | ⚠️ (Manual) |
-| **Zero Process Leaks** | ✅ | ⚠️ | ✅ | ❌ |
+```bash
+python antigravity_excel_cli.py --daemon-start
+python antigravity_excel_cli.py --daemon-status
+python antigravity_excel_cli.py --daemon-stop
+```
 
-## 📄 License & Authorship
+### Read and inspect data
 
-- **Author:** Francisco Grandón Vergara
-- **License:** MIT License
+```bash
+python antigravity_excel_cli.py get-csv "A1:F20" --sheet "Datos" --json
+python antigravity_excel_cli.py audit-quality --range "A1:P700" --sheet "Datos" --json
+python antigravity_excel_cli.py check-errors "A1:P700" --sheet "Datos" --json
+```
+
+### Create and modify workbook content
+
+```bash
+python antigravity_excel_cli.py set-cells --cells-json '{"A1":{"value":"Revenue"},"B1":{"value":"Cost"}}' --sheet "Summary" --json
+python antigravity_excel_cli.py aggregate --group-by Segment --metric Sales --func sum --sheet Datos --json
+python antigravity_excel_cli.py create-pivot --source "A1:F200" --rows Segment --value-field Sales --dest-sheet "PivotSummary" --json
+```
+
+---
+
+## Architecture highlights
+
+The project is organized around a clear runtime model:
+
+- `AntigravityExcelEngine` is the main orchestration façade
+- `LiveExcelCOMBackend` handles visible desktop Excel sessions
+- `HeadlessOpenPyXLBackend` handles file-only workflows
+- `Named Pipe IPC` keeps a resident daemon warm and reduces repeated overhead
+- `operations/` contains business logic for reads, writes, audits, aggregation and curation
+- `utils/`, `models/`, `formatting/`, and `formulas/` provide modular support services
+
+This architecture is documented in detail in:
+
+- `docs/ARCHITECTURE.md`
+- `docs/EXAMPLES.md`
+- `excel-skills/README.md`
+
+---
+
+## Recent improvements and changes
+
+The project has recently been upgraded with a modular refactor and productivity improvements, including:
+
+- package restructuring under `antigravity_excel_engine/`
+- separation of backends, operations, formulas, formatting, IPC and utilities
+- more robust CLI and daemon message dispatch
+- improved Excel COM safety and compatibility handling
+- formula sanitization and validation improvements
+- data curation, outlier detection and quality audit workflows
+- CI coverage and quality gates for testing and linting
+- expanded documentation and skill catalog for agent workflows
+
+The latest project status is recorded in `CHANGELOG.md` and the current validation suite reports:
+
+- 87/87 tests passing
+- 100% pass rate in the automated suite
+
+---
+
+## Documentation
+
+- [CHANGELOG.md](CHANGELOG.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/EXAMPLES.md](docs/EXAMPLES.md)
+- [excel-skills/README.md](excel-skills/README.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+
+---
+
+## License
+
+This project is licensed under the MIT License.
+
+See [LICENSE](LICENSE) for details.
+
+---
+
+## Author
+
+Francisco Grandón Vergara
