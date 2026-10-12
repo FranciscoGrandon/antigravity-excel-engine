@@ -190,3 +190,23 @@ class TestDaemonNamedPipe:
         stop_res = stop_daemon_process(pipe_name=pipe)
         assert stop_res["status"] == "info"
         assert "no estaba en ejecución" in stop_res["message"]
+
+    def test_daemon_wait_until_ready_and_dispatch_com(self, active_daemon):
+        """Valida comandos wait-until-ready y dispatch-com a través del Named Pipe."""
+        pipe = active_daemon["pipe"]
+
+        # 1. wait-until-ready
+        resp_wait = send_pipe_message({"command": "wait-until-ready", "args": {"timeout": 2.0}}, timeout_ms=1000, pipe_name=pipe)
+        assert resp_wait is not None
+        assert resp_wait.get("status") == "success"
+        res_wait = resp_wait.get("result")
+        assert res_wait["ready"] is True
+        assert res_wait["backend"] == "headless"
+
+        # 2. dispatch-com (en backend headless de prueba retorna mensaje informativo)
+        resp_disp = send_pipe_message({"command": "dispatch-com", "args": {"target": "app", "member": "Calculate"}}, timeout_ms=1000, pipe_name=pipe)
+        assert resp_disp is not None
+        assert resp_disp.get("status") == "success"
+        res_disp = resp_disp.get("result")
+        assert res_disp["success"] is False
+        assert "dispatch_com solo está disponible en Live COM backend" in res_disp["error"]

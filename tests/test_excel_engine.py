@@ -656,6 +656,74 @@ class TestAntigravityExcelEngine(unittest.TestCase):
         self.assertIsNotNone(cell_outlier.comment)
         self.assertIn("Outlier detectado", cell_outlier.comment.text)
 
+    def test_wait_until_ready_headless(self):
+        res = self.engine.wait_until_ready(timeout_sec=2.0)
+        self.assertTrue(res["ready"])
+        self.assertEqual(res["backend"], "headless")
+        self.assertEqual(res["elapsed_sec"], 0.0)
+
+    def test_dispatch_com_headless(self):
+        res = self.engine.dispatch_com(target="app", member="Calculate")
+        self.assertFalse(res["success"])
+        self.assertEqual(res["backend"], "headless")
+        self.assertIn("dispatch_com solo está disponible en Live COM backend", res["error"])
+
+
+class TestLiveExcelCOMBackendMock(unittest.TestCase):
+    def test_live_backend_wait_until_ready_mock(self):
+        from unittest.mock import MagicMock
+        from antigravity_excel_core import LiveExcelCOMBackend
+        backend = LiveExcelCOMBackend.__new__(LiveExcelCOMBackend)
+        mock_app = MagicMock()
+        mock_app.Ready = True
+        mock_app.CalculationState = 0
+        backend.app = mock_app
+        backend.wb = MagicMock()
+
+        res = backend.wait_until_ready(timeout_sec=1.0, retry_interval=0.01)
+        self.assertTrue(res["ready"])
+        self.assertEqual(res["calculation_state"], "done")
+        self.assertIn("elapsed_sec", res)
+
+    def test_live_backend_wait_until_ready_timeout(self):
+        from unittest.mock import MagicMock
+        from antigravity_excel_core import LiveExcelCOMBackend
+        backend = LiveExcelCOMBackend.__new__(LiveExcelCOMBackend)
+        mock_app = MagicMock()
+        mock_app.Ready = False
+        backend.app = mock_app
+        backend.wb = MagicMock()
+
+        res = backend.wait_until_ready(timeout_sec=0.05, retry_interval=0.01)
+        self.assertFalse(res["ready"])
+        self.assertTrue(res["timeout"])
+
+    def test_live_backend_dispatch_com_mock(self):
+        from unittest.mock import MagicMock
+        from antigravity_excel_core import LiveExcelCOMBackend
+        backend = LiveExcelCOMBackend.__new__(LiveExcelCOMBackend)
+        mock_app = MagicMock()
+        mock_app.Version = "16.0"
+        mock_app.Calculate.return_value = None
+        backend.app = mock_app
+        backend.wb = MagicMock()
+
+        # 1. Leer propiedad
+        res_prop = backend.dispatch_com(target="app", member="Version")
+        self.assertTrue(res_prop["success"])
+        self.assertEqual(res_prop["result"], "16.0")
+
+        # 2. Invocar método
+        res_method = backend.dispatch_com(target="app", member="Calculate")
+        self.assertTrue(res_method["success"])
+        mock_app.Calculate.assert_called_once()
+
+        # 3. Asignar propiedad
+        mock_app.ScreenUpdating = True
+        res_set = backend.dispatch_com(target="app", member="ScreenUpdating", args=[False])
+        self.assertTrue(res_set["success"])
+        self.assertFalse(mock_app.ScreenUpdating)
+
 
 if __name__ == "__main__":
     unittest.main()
