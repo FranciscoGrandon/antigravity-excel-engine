@@ -19,6 +19,7 @@ def write_cell_range(
     formulas: Optional[List[List[str]]] = None,
     styles: Optional[Dict[str, Any]] = None,
     autofit: bool = False,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """
     Escribe una matriz rectangular de celdas a partir de una celda inicial.
@@ -31,13 +32,14 @@ def write_cell_range(
         formulas: Matriz opcional de fórmulas en formato Excel.
         styles: Diccionario de estilos aplicado al rango.
         autofit: Si True, ajusta automáticamente el ancho de columnas.
+        dry_run: Si True, simula la operación sin modificar el libro.
 
     Returns:
         Diccionario con resultado de la operación.
     """
     logger.debug(
-        "write_cell_range | start=%s sheet=%s rows=%d",
-        start_cell, sheet, len(values) if values else 0
+        "write_cell_range | start=%s sheet=%s rows=%d dry_run=%s",
+        start_cell, sheet, len(values) if values else 0, dry_run
     )
     return backend.set_cell_range(
         start_cell=start_cell,
@@ -46,6 +48,7 @@ def write_cell_range(
         formulas=formulas,
         styles=styles,
         autofit=autofit,
+        dry_run=dry_run,
     )
 
 
@@ -54,6 +57,7 @@ def write_cells_declarative(
     cells_map: Dict[str, Dict[str, Any]],
     sheet: Optional[str] = None,
     autofit: bool = False,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """
     Escritura declarativa de celdas individuales con valores, fórmulas y estilos.
@@ -63,12 +67,13 @@ def write_cells_declarative(
         cells_map: Diccionario { "A1": {"value": ..., "formula": ..., "style": ...} }.
         sheet: Nombre de hoja; None usa la hoja activa.
         autofit: Si True, ajusta automáticamente el ancho de columnas.
+        dry_run: Si True, simula la operación sin modificar el libro.
 
     Returns:
         Diccionario con resultado de la operación.
     """
-    logger.debug("write_cells_declarative | cells=%d sheet=%s", len(cells_map), sheet)
-    return backend.set_cells(cells_map=cells_map, sheet=sheet, autofit=autofit)
+    logger.debug("write_cells_declarative | cells=%d sheet=%s dry_run=%s", len(cells_map), sheet, dry_run)
+    return backend.set_cells(cells_map=cells_map, sheet=sheet, autofit=autofit, dry_run=dry_run)
 
 
 def copy_paste_range(
@@ -97,10 +102,11 @@ def copy_paste_range(
         "copy_paste_range | src=%s dest=%s paste_values_only=%s",
         source_range, dest_cell, paste_values_only
     )
+    paste_type = "values" if paste_values_only else "all"
     return backend.copy_paste_range(
-        source_range=source_range,
-        dest_cell=dest_cell,
-        source_sheet=source_sheet,
-        dest_sheet=dest_sheet,
-        paste_values_only=paste_values_only,
+        src_range=source_range,
+        dst_start_cell=dest_cell,
+        src_sheet=source_sheet,
+        dst_sheet=dest_sheet,
+        paste_type=paste_type,
     )

@@ -4,6 +4,7 @@ Operaciones de visualización: tablas dinámicas, gráficos y tablas de resumen.
 Delegación al backend activo sin lógica de negocio propia.
 """
 
+import re
 from typing import Any, Dict, List, Optional, Union
 
 from antigravity_excel_engine.utils.logging import get_logger
@@ -180,3 +181,164 @@ def create_summary_table(
     if title is not None:
         kwargs["title"] = title
     return backend.create_summary_table(**kwargs)
+
+
+def parse_series_formula(formula: str) -> Dict[str, str]:
+    """
+    Parsea una fórmula =SERIES(name_ref, x_range, y_range, order) de Excel,
+    respetando comillas simples de nombres de hoja y comillas dobles de texto.
+
+    Args:
+        formula: Cadena con la fórmula de la serie.
+
+    Returns:
+        Diccionario con claves: name_ref, x_range, y_range, order.
+    """
+    res = {"name_ref": "", "x_range": "", "y_range": "", "order": "1"}
+    if not formula:
+        return res
+
+    raw = formula.strip()
+    m = re.match(r"^=?SERIES\s*\((.*)\)\s*$", raw, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return res
+
+    inner = m.group(1).strip()
+    parts = []
+    current = []
+    in_single_quote = False
+    in_double_quote = False
+    paren_depth = 0
+
+    for ch in inner:
+        if ch == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            current.append(ch)
+        elif ch == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            current.append(ch)
+        elif ch == '(' and not in_single_quote and not in_double_quote:
+            paren_depth += 1
+            current.append(ch)
+        elif ch == ')' and not in_single_quote and not in_double_quote:
+            paren_depth = max(0, paren_depth - 1)
+            current.append(ch)
+        elif ch == ',' and not in_single_quote and not in_double_quote and paren_depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+
+    parts.append("".join(current).strip())
+
+    if len(parts) >= 4:
+        res["name_ref"] = parts[0]
+        res["x_range"] = parts[1]
+        res["y_range"] = parts[2]
+        res["order"] = parts[3]
+    elif len(parts) == 3:
+        res["name_ref"] = ""
+        res["x_range"] = parts[0]
+        res["y_range"] = parts[1]
+        res["order"] = parts[2]
+    elif len(parts) == 2:
+        res["x_range"] = parts[0]
+        res["y_range"] = parts[1]
+    elif len(parts) == 1:
+        res["y_range"] = parts[0]
+
+    return res
+
+
+def _extend_area(area_ref: str, to_col: Optional[str] = None, to_row: Optional[int] = None) -> str:
+    """Helper interno para extender una coordenada o rango A1."""
+    if not area_ref:
+        return area_ref
+
+    sheet_prefix = ""
+    target_part = area_ref.strip()
+
+    m_sheet = re.match(r"^((?:'[^']+'|[^!]+)!)(.*)$", target_part)
+    if m_sheet:
+        sheet_prefix = m_sheet.group(1)
+        target_part = m_sheet.group(2).strip()
+
+    if ":" in target_part:
+        start_cell, end_cell = target_part.split(":", 1)
+    else:
+        start_cell = target_part
+        end_cell = target_part
+
+    m_cell = re.match(r"^(\$?)([A-Za-z]+)(\$?)(-?\d+)$", end_cell.strip())
+    if not m_cell:
+        return area_ref
+
+    col_dollar, col_letters, row_dollar, row_num = m_cell.groups()
+
+    new_col = to_col.upper() if to_col else col_letters
+    new_row = str(to_row) if to_row is not None else row_num
+
+    new_end_cell = f"{col_dollar}{new_col}{row_dollar}{new_row}"
+
+    return f"{sheet_prefix}{start_cell}:{new_end_cell}"
+
+
+def extend_range_reference(ref: str, to_col: Optional[str] = None, to_row: Optional[int] = None) -> str:
+    """
+    Extiende la referencia de rango hacia to_col y/o to_row,
+    soportando referencias múltiples entre paréntesis.
+    """
+    if not ref:
+        return ref
+    ref_stripped = ref.strip()
+    if ref_stripped.startswith("(") and ref_stripped.endswith(")"):
+        inner = ref_stripped[1:-1]
+        areas = [a.strip() for a in inner.split(",")]
+        if areas:
+            areas[-1] = _extend_area(areas[-1], to_col=to_col, to_row=to_row)
+        return f"({','.join(areas)})"
+    return _extend_area(ref_stripped, to_col=to_col, to_row=to_row)
+
+
+def inspect_charts(backend, sheet: Optional[str] = None) -> Dict[str, Any]:
+    """Inspecciona gráficos en la hoja indicada (o todas)."""
+    return backend.inspect_charts(sheet=sheet)
+
+
+def extend_chart_series(
+    backend,
+    to_col: Optional[str] = None,
+    to_row: Optional[int] = None,
+    sheet: Optional[str] = None,
+    charts: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Extiende series y categorías de los gráficos indicados hasta to_col y/o to_row."""
+    return backend.extend_chart_series(to_col=to_col, to_row=to_row, sheet=sheet, charts=charts)
+
+
+def update_chart_series(
+    backend,
+    chart_name: str,
+    series_index: int,
+    x_range: Optional[str] = None,
+    y_range: Optional[str] = None,
+    name_ref: Optional[str] = None,
+    formula: Optional[str] = None,
+    sheet: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Actualiza una serie específica de un gráfico."""
+    return backend.update_chart_series(
+        chart_name=chart_name,
+        series_index=series_index,
+        x_range=x_range,
+        y_range=y_range,
+        name_ref=name_ref,
+        formula=formula,
+        sheet=sheet,
+    )
+
+
+def inspect_workbook(backend, sheet: Optional[str] = None, include_charts: bool = True) -> Dict[str, Any]:
+    """Inspecciona metadatos del libro y detalle por hoja."""
+    return backend.inspect_workbook(sheet=sheet, include_charts=include_charts)
+

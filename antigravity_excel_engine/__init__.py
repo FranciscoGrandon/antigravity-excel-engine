@@ -7,124 +7,126 @@ Motor modular de automatización, análisis y curación inteligente de Excel.
 __version__ = "1.0.0"
 __author__ = "Francisco Grandón Vergara"
 
+from .backends import (
+    BaseExcelBackend,
+    HeadlessOpenPyXLBackend,
+    LiveExcelCOMBackend,
+    excel_fast_mode,
+    get_com_clean_address,
+    retry_on_excel_busy,
+)
+from .engine import AntigravityExcelEngine, ExcelEngine
+from .formatting import (
+    FinancialStyleGuide,
+    apply_borders_openpyxl,
+    apply_number_format,
+    apply_style_preset,
+    apply_style_preset_com,
+    apply_style_preset_openpyxl,
+    hex_to_argb_hex,
+    hex_to_rgb_int,
+)
+from .formulas import (
+    COM_EXCEL_ERROR_MAP,
+    KNOWN_FORMULA_ERRORS,
+    MODERN_EXCEL_FUNCTIONS,
+    audit_com_formula_errors,
+    audit_openpyxl_formula_errors,
+    get_formula_error_name,
+    is_formula_error_value,
+    make_absolute_reference,
+    make_col_absolute_reference,
+    make_relative_reference,
+    make_row_absolute_reference,
+    propagate_formula_row,
+    replace_formula_placeholders,
+    sanitize_formula_compatibility,
+    strip_xlfn_prefix,
+    STRUCTURED_REF_REGEX,
+    transpile_structured_formula,
+)
 from .models import (
+    AggregateResult,
+    AuditReport,
+    BaseResponse,
+    CellWriteRequest,
+    # Results
+    CellWriteResult,
+    CuratePipelineRequest,
+    CurateResult,
+    # Requests
+    DaemonRequest,
+    ErrorResponse,
+    ExcelBusyError,
     # Errors
     ExcelEngineError,
     ExcelLockError,
-    WorkbookNotFoundError,
     FormulaValidationError,
-    PipeConnectionError,
-    UnsupportedOperationError,
     InvalidRangeError,
-    ExcelBusyError,
-    # Requests
-    DaemonRequest,
-    PipeCommandRequest,
-    CellWriteRequest,
-    CuratePipelineRequest,
     # Responses
     OperationStatus,
-    BaseResponse,
-    SuccessResponse,
-    ErrorResponse,
-    # Results
-    CellWriteResult,
-    AuditReport,
-    CurateResult,
-    AggregateResult,
-    PivotResult,
     OutlierResult,
+    PipeCommandRequest,
+    PipeConnectionError,
+    PivotResult,
+    SuccessResponse,
+    UnsupportedOperationError,
+    WorkbookNotFoundError,
 )
-
+from .operations import (
+    add_calculated_column,
+    aggregate,
+    compute_aggregation_metric,
+    audit_data_quality,
+    check_formula_errors,
+    clean_table_dataset,
+    copy_paste_range,
+    create_chart,
+    create_pivot_table,
+    create_summary_table,
+    curate_pipeline,
+    detect_and_flag_outliers,
+    get_range_as_csv,
+    read_ranges,
+    remove_duplicates,
+    write_cell_range,
+    write_cells_declarative,
+    create_table,
+    list_tables,
+    resize_table,
+    inspect_table_schema,
+    get_ai_grounding_context,
+)
 from .utils import (
-    # Logging
-    LOGGER_NAME,
-    get_logger,
-    log_operation,
-    log_exception,
-    log_duration,
-    # Ranges
-    coordinate_from_string,
-    column_index_from_string,
-    col_to_index,
-    get_column_letter,
-    index_to_col,
-    range_boundaries,
-    parse_range,
-    chunk_cell_addresses,
     # Dates
     EXCEL_BASE_DATE,
     EXCEL_BASE_DATETIME,
-    parse_excel_date_serial,
+    # Logging
+    LOGGER_NAME,
+    chunk_cell_addresses,
     coerce_date_to_excel_serial,
-    excel_serial_to_datetime,
+    col_to_index,
+    column_index_from_string,
+    # Ranges
+    coordinate_from_string,
     excel_serial_to_date,
+    excel_serial_to_datetime,
+    get_column_letter,
+    get_logger,
+    index_to_col,
+    is_formula_error,
+    log_duration,
+    log_exception,
+    log_operation,
+    parse_excel_date_serial,
+    parse_range,
+    range_boundaries,
+    sanitize_sheet_name,
+    validate_formula_text,
+    validate_range_string,
     # Validation
     validate_sheet_name,
-    sanitize_sheet_name,
-    validate_range_string,
     validate_workbook_exists,
-    validate_formula_text,
-    is_formula_error,
-)
-
-from .formatting import (
-    FinancialStyleGuide,
-    hex_to_rgb_int,
-    hex_to_argb_hex,
-    apply_number_format,
-    apply_borders_openpyxl,
-    apply_style_preset_openpyxl,
-    apply_style_preset_com,
-    apply_style_preset,
-)
-
-from .formulas import (
-    MODERN_EXCEL_FUNCTIONS,
-    sanitize_formula_compatibility,
-    strip_xlfn_prefix,
-    COM_EXCEL_ERROR_MAP,
-    KNOWN_FORMULA_ERRORS,
-    is_formula_error_value,
-    get_formula_error_name,
-    audit_openpyxl_formula_errors,
-    audit_com_formula_errors,
-    propagate_formula_row,
-    replace_formula_placeholders,
-    make_absolute_reference,
-    make_relative_reference,
-    make_row_absolute_reference,
-    make_col_absolute_reference,
-)
-
-from .backends import (
-    BaseExcelBackend,
-    LiveExcelCOMBackend,
-    HeadlessOpenPyXLBackend,
-    retry_on_excel_busy,
-    excel_fast_mode,
-    get_com_clean_address,
-)
-
-from .engine import AntigravityExcelEngine, ExcelEngine
-
-from .operations import (
-    read_ranges,
-    get_range_as_csv,
-    write_cell_range,
-    write_cells_declarative,
-    copy_paste_range,
-    audit_data_quality,
-    check_formula_errors,
-    detect_and_flag_outliers,
-    aggregate,
-    add_calculated_column,
-    remove_duplicates,
-    clean_table_dataset,
-    curate_pipeline,
-    create_pivot_table,
-    create_chart,
-    create_summary_table,
 )
 
 __all__ = [
@@ -217,6 +219,8 @@ __all__ = [
     "make_relative_reference",
     "make_row_absolute_reference",
     "make_col_absolute_reference",
+    "STRUCTURED_REF_REGEX",
+    "transpile_structured_formula",
     # Operations
     "read_ranges",
     "get_range_as_csv",
@@ -227,6 +231,7 @@ __all__ = [
     "check_formula_errors",
     "detect_and_flag_outliers",
     "aggregate",
+    "compute_aggregation_metric",
     "add_calculated_column",
     "remove_duplicates",
     "clean_table_dataset",
@@ -234,4 +239,9 @@ __all__ = [
     "create_pivot_table",
     "create_chart",
     "create_summary_table",
+    "create_table",
+    "list_tables",
+    "resize_table",
+    "inspect_table_schema",
+    "get_ai_grounding_context",
 ]

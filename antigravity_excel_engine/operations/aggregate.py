@@ -4,6 +4,7 @@ Operaciones de agregación estadística y columnas calculadas.
 Delegación al backend activo sin lógica de negocio propia.
 """
 
+import math
 from typing import Any, Dict, List, Optional
 
 from antigravity_excel_engine.utils.logging import get_logger
@@ -69,6 +70,7 @@ def add_calculated_column(
     sheet: Optional[str] = None,
     col_format: Optional[str] = None,
     autofit: bool = True,
+    dry_run: bool = False,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """
@@ -81,6 +83,7 @@ def add_calculated_column(
         sheet: Nombre de hoja; None usa la activa.
         col_format: Formato numérico opcional (o 'number_format').
         autofit: Si True, autoajusta el ancho de la columna.
+        dry_run: Si True, simula la operación sin modificar el libro.
 
     Returns:
         Diccionario con la columna destino, fila de inicio/fin y fórmulas aplicadas.
@@ -91,16 +94,18 @@ def add_calculated_column(
     resolved_format = col_format or kwargs.get("number_format") or kwargs.get("col_format")
     resolved_sheet = sheet if sheet is not None else kwargs.get("sheet")
     resolved_autofit = autofit if "autofit" not in kwargs else kwargs.get("autofit", True)
+    resolved_dry_run = dry_run if "dry_run" not in kwargs else bool(kwargs.get("dry_run"))
 
     logger.debug(
-        "add_calculated_column | header=%s formula=%s format=%s",
-        resolved_header, resolved_formula, resolved_format
+        "add_calculated_column | header=%s formula=%s format=%s dry_run=%s",
+        resolved_header, resolved_formula, resolved_format, resolved_dry_run
     )
 
     call_kwargs: Dict[str, Any] = {
         "header": resolved_header,
         "formula_template": resolved_formula,
         "autofit": resolved_autofit,
+        "dry_run": resolved_dry_run,
     }
     if resolved_format is not None:
         call_kwargs["number_format"] = resolved_format
@@ -108,3 +113,39 @@ def add_calculated_column(
         call_kwargs["sheet"] = resolved_sheet
     return backend.add_calculated_column(**call_kwargs)
 
+
+
+def compute_aggregation_metric(values: List[Any], agg_func: str = "sum") -> float:
+    """
+    Calcula una métrica agregada ('sum', 'avg', 'count', 'min', 'max') usando math.fsum
+    para evitar errores de precisión flotante IEEE 754.
+    Filtra y sanitiza valores None, vacíos o no numéricos.
+    """
+    clean_floats: List[float] = []
+    for v in values:
+        if v is None or v == "":
+            continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            clean_floats.append(float(v))
+        elif isinstance(v, str):
+            try:
+                clean_floats.append(float(v.strip().replace(",", ".")))
+            except ValueError:
+                continue
+
+    func = agg_func.lower()
+    if func == "count":
+        return float(len(clean_floats))
+    if not clean_floats:
+        return 0.0
+
+    total = math.fsum(clean_floats)
+    if func == "sum":
+        return total
+    elif func in ("avg", "mean"):
+        return total / len(clean_floats)
+    elif func == "min":
+        return min(clean_floats)
+    elif func == "max":
+        return max(clean_floats)
+    return total

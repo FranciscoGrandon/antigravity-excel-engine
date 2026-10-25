@@ -3,7 +3,7 @@
 Directrices, constantes y paletas visuales para modelado financiero y presentación en Excel.
 """
 
-from typing import Any, Optional, Dict
+from typing import Any, Dict, Optional
 
 
 class FinancialStyleGuide:

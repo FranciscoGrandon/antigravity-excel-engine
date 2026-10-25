@@ -53,7 +53,16 @@ COMMANDS: List[str] = [
     "curate",
     "wait-until-ready",
     "dispatch-com",
+    "inspect-workbook",
+    "inspect-charts",
+    "extend-chart-series",
+    "update-chart-series",
+    "batch",
+    "create-table",
+    "inspect-table",
 ]
+
+VALID_COMMANDS: List[str] = COMMANDS
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constructores de mensajes

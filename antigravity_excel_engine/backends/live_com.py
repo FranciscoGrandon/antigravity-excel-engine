@@ -7,6 +7,7 @@ Control en vivo de Microsoft Excel mediante Win32 COM, ROT y hook visual de escr
 import csv
 import datetime
 import functools
+import math
 import io
 import os
 import re
@@ -181,10 +182,13 @@ from antigravity_excel_engine.formatting import (
     hex_to_rgb_int,
 )
 from antigravity_excel_engine.formulas import (
+    STRUCTURED_REF_REGEX,
     audit_com_formula_errors,
     propagate_formula_row,
     sanitize_formula_compatibility,
+    transpile_structured_formula,
 )
+from antigravity_excel_engine.models.errors import ExcelLockError
 from antigravity_excel_engine.utils.dates import parse_excel_date_serial
 
 
@@ -193,6 +197,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         if not win32com:
             raise ImportError("win32com no está instalado en este entorno.")
         self.file_path = file_path
+        self._owns_app = False
         self.app = self._init_app()
         self.wb = self._init_workbook(file_path)
 
@@ -202,6 +207,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         try:
             app = win32com.client.GetActiveObject("Excel.Application")
             app.Visible = True
+            self._owns_app = False
             return app
         except Exception:
             pass
@@ -209,11 +215,13 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         # 2. Try native accessibility hook to interactive desktop Excel window (oleacc)
         app = self._try_get_live_desktop_excel(self.file_path)
         if app:
+            self._owns_app = False
             return app
 
         # 3. Fallback to Dispatch
         app = win32com.client.Dispatch("Excel.Application")
         app.Visible = True
+        self._owns_app = True
         return app
 
     def _try_get_live_desktop_excel(self, target_file: Optional[str] = None):
@@ -303,21 +311,35 @@ class LiveExcelCOMBackend(BaseExcelBackend):
     @retry_on_excel_busy()
     def _init_workbook(self, file_path: Optional[str]):
         if file_path:
-            abs_p = os.path.abspath(file_path).lower()
+            if file_path.startswith(r"\\") or file_path.startswith("//"):
+                abs_p = file_path
+            else:
+                abs_p = os.path.abspath(file_path)
+            abs_p_lower = abs_p.lower()
             base_name = os.path.basename(file_path).lower()
 
             for w in self.app.Workbooks:
                 try:
                     w_full = str(w.FullName).lower()
                     w_name = str(w.Name).lower()
-                    if w_full == abs_p or w_name == base_name or base_name in w_full:
+                    if w_full == abs_p_lower or w_name == base_name or base_name in w_full:
                         return w
                 except Exception:
                     pass
 
             if os.path.exists(abs_p):
-                return self.app.Workbooks.Open(abs_p)
+                try:
+                    return self.app.Workbooks.Open(abs_p, 0, False)
+                except TypeError:
+                    return self.app.Workbooks.Open(abs_p)
             else:
+                if abs_p.startswith(r"\\") or abs_p.startswith("//"):
+                    try:
+                        return self.app.Workbooks.Open(abs_p, 0, False)
+                    except TypeError:
+                        return self.app.Workbooks.Open(abs_p)
+                    except Exception:
+                        pass
                 wb = self.app.Workbooks.Add()
                 wb.SaveAs(abs_p)
                 return wb
@@ -338,11 +360,48 @@ class LiveExcelCOMBackend(BaseExcelBackend):
 
     @retry_on_excel_busy()
     def status(self) -> Dict[str, Any]:
+        wb_name = None
+        full_name = None
+        read_only = False
+        saved = True
+        active_sheet = None
+        sheets = []
+
+        if self.wb:
+            try:
+                wb_name = self.wb.Name
+            except Exception:
+                pass
+            try:
+                full_name = getattr(self.wb, "FullName", None)
+            except Exception:
+                pass
+            try:
+                read_only = bool(getattr(self.wb, "ReadOnly", False))
+            except Exception:
+                pass
+            try:
+                saved = bool(getattr(self.wb, "Saved", True))
+            except Exception:
+                pass
+            try:
+                if self.wb.ActiveSheet:
+                    active_sheet = self.wb.ActiveSheet.Name
+            except Exception:
+                pass
+            try:
+                sheets = [s.Name for s in self.wb.Sheets]
+            except Exception:
+                pass
+
         return {
             "backend": "live_com",
-            "active_workbook": self.wb.Name if self.wb else None,
-            "active_sheet": self.wb.ActiveSheet.Name if (self.wb and self.wb.ActiveSheet) else None,
-            "sheets": [s.Name for s in self.wb.Sheets] if self.wb else []
+            "active_workbook": wb_name,
+            "active_sheet": active_sheet,
+            "sheets": sheets,
+            "full_name": full_name,
+            "read_only": read_only,
+            "saved": saved,
         }
 
     @retry_on_excel_busy()
@@ -379,7 +438,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         return res
 
     @retry_on_excel_busy()
-    def set_cell_range(self, start_cell: str, values: List[List[Any]], sheet: Optional[str] = None, formulas: Optional[List[List[str]]] = None, styles: Optional[Dict[str, Any]] = None, autofit: bool = False) -> Dict[str, Any]:
+    def set_cell_range(self, start_cell: str, values: List[List[Any]], sheet: Optional[str] = None, formulas: Optional[List[List[str]]] = None, styles: Optional[Dict[str, Any]] = None, autofit: bool = False, dry_run: bool = False) -> Dict[str, Any]:
         ws = self._get_sheet(sheet)
         start_rng = ws.Range(start_cell)
         row_count = len(values) if values else (len(formulas) if formulas else 0)
@@ -390,6 +449,31 @@ class LiveExcelCOMBackend(BaseExcelBackend):
 
         end_rng = ws.Cells(start_rng.Row + row_count - 1, start_rng.Column + col_count - 1)
         target_rng = ws.Range(start_rng, end_rng)
+        target_address = get_com_clean_address(target_rng)
+
+        if dry_run:
+            sample_diff = []
+            data = formulas if formulas else values
+            for r_idx in range(min(row_count, 10)):
+                for c_idx in range(min(col_count, 5)):
+                    cell_com = ws.Cells(start_rng.Row + r_idx, start_rng.Column + c_idx)
+                    cell_coord = get_com_clean_address(cell_com)
+                    old_val = cell_com.Value
+                    val = data[r_idx][c_idx] if data and r_idx < len(data) and c_idx < len(data[r_idx]) else None
+                    is_form = isinstance(val, str) and val.startswith("=")
+                    sample_diff.append({
+                        "cell": cell_coord,
+                        "old_value": old_val,
+                        "new_value": val if not is_form else None,
+                        "formula": sanitize_formula_compatibility(val) if is_form else None,
+                    })
+            return {
+                "status": "success",
+                "dry_run": True,
+                "affected_cells_count": row_count * col_count,
+                "target_range": target_address,
+                "sample_diff": sample_diff[:10],
+            }
 
         if values:
             target_rng.Value = [tuple(row) for row in values]
@@ -400,12 +484,43 @@ class LiveExcelCOMBackend(BaseExcelBackend):
             target_rng.Columns.AutoFit()
 
         self.app.Calculate()
-        return {"status": "success", "range": get_com_clean_address(target_rng), "rows": row_count, "cols": col_count}
+        return {"status": "success", "range": target_address, "rows": row_count, "cols": col_count}
 
     @retry_on_excel_busy()
-    def set_cells(self, cells_map: Dict[str, Dict[str, Any]], sheet: Optional[str] = None, autofit: bool = False) -> Dict[str, Any]:
+    def set_cells(self, cells_map: Dict[str, Dict[str, Any]], sheet: Optional[str] = None, autofit: bool = False, dry_run: bool = False) -> Dict[str, Any]:
         """Aplica un mapa declarativo de celdas A1 -> {value, formula, note, cellStyles} con recálculo atómico."""
         ws = self._get_sheet(sheet)
+        if dry_run:
+            sample_diff = []
+            for coord, cell_info in cells_map.items():
+                cell = ws.Range(coord)
+                old_val = cell.Value
+                new_formula = None
+                new_val = None
+                if "formula" in cell_info and cell_info["formula"]:
+                    new_formula = sanitize_formula_compatibility(cell_info["formula"])
+                elif "value" in cell_info:
+                    val = cell_info["value"]
+                    if isinstance(val, str) and val.startswith("="):
+                        new_formula = sanitize_formula_compatibility(val)
+                    else:
+                        new_val = val
+                sample_diff.append({
+                    "cell": coord,
+                    "old_value": old_val,
+                    "new_value": new_val,
+                    "formula": new_formula,
+                })
+            coords = list(cells_map.keys())
+            target_range = f"{coords[0]}:{coords[-1]}" if len(coords) > 1 else (coords[0] if coords else "")
+            return {
+                "status": "success",
+                "dry_run": True,
+                "affected_cells_count": len(cells_map),
+                "target_range": target_range,
+                "sample_diff": sample_diff[:10],
+            }
+
         formula_results = {}
         for coord, cell_info in cells_map.items():
             cell = ws.Range(coord)
@@ -478,9 +593,16 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         return {"status": "success", "source": src_range, "destination": dst_start_cell}
 
     @retry_on_excel_busy()
-    def check_formula_errors(self, range_str: str, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
+    def check_formula_errors(self, range_str: Optional[str] = None, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
         ws = self._get_sheet(sheet)
-        return audit_com_formula_errors(ws, range_str)
+        if range_str:
+            target_range = range_str
+        else:
+            try:
+                target_range = ws.UsedRange.Address(False, False)
+            except Exception:
+                target_range = "A1:Z100"
+        return audit_com_formula_errors(ws, target_range)
 
     @retry_on_excel_busy()
     def audit_data_quality(self, range_str: Optional[str] = None, sheet: Optional[str] = None) -> Dict[str, Any]:
@@ -635,8 +757,8 @@ class LiveExcelCOMBackend(BaseExcelBackend):
 
         results = []
         for g_key, data in groups.items():
-            vals = data["values"]
-            total = sum(vals)
+            vals = [float(v) for v in data["values"] if v is not None and not isinstance(v, bool)]
+            total = math.fsum(vals) if vals else 0.0
             avg = total / len(vals) if vals else 0.0
 
             if agg_func.lower() == "sum":
@@ -679,19 +801,69 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         }
 
     @retry_on_excel_busy()
-    def add_calculated_column(self, header: str, formula_template: str, number_format: Optional[str] = FinancialStyleGuide.CURRENCY_FORMAT, sheet: Optional[str] = None, autofit: bool = True) -> Dict[str, Any]:
+    def add_calculated_column(self, header: str, formula_template: str, number_format: Optional[str] = FinancialStyleGuide.CURRENCY_FORMAT, sheet: Optional[str] = None, autofit: bool = True, dry_run: bool = False) -> Dict[str, Any]:
         ws = self._get_sheet(sheet)
         rng = ws.UsedRange
         last_col = rng.Columns.Count
         new_col = last_col + 1
         last_row = rng.Rows.Count
 
+        # Determinar si contiene referencias estructuradas de tablas
+        is_structured = bool(STRUCTURED_REF_REGEX.search(formula_template) or "[@" in formula_template)
+        headers_map = {}
+        if is_structured:
+            from antigravity_excel_engine.utils.ranges import get_column_letter
+            for c in range(1, new_col):
+                h_val = ws.Cells(1, c).Value
+                if h_val is not None:
+                    headers_map[str(h_val).strip()] = get_column_letter(c)
+
+        target_start = get_com_clean_address(ws.Cells(1, new_col))
+        target_end = get_com_clean_address(ws.Cells(last_row, new_col))
+        target_range = f"{target_start}:{target_end}"
+
+        if dry_run:
+            sample_diff = [
+                {
+                    "cell": target_start,
+                    "old_value": ws.Cells(1, new_col).Value,
+                    "new_value": header,
+                    "formula": None,
+                }
+            ]
+            for r in range(2, min(last_row + 1, 12)):
+                cell_addr = get_com_clean_address(ws.Cells(r, new_col))
+                if is_structured:
+                    rf = transpile_structured_formula(formula_template, headers_map, r)
+                elif "{r}" in formula_template or "{row}" in formula_template:
+                    rf = formula_template.replace("{r}", str(r)).replace("{row}", str(r))
+                else:
+                    rf = propagate_formula_row(formula_template, r, base_row=2)
+                sample_diff.append({
+                    "cell": cell_addr,
+                    "old_value": ws.Cells(r, new_col).Value,
+                    "new_value": None,
+                    "formula": rf,
+                })
+            return {
+                "status": "success",
+                "dry_run": True,
+                "affected_cells_count": last_row,
+                "target_range": target_range,
+                "header": header,
+                "column_index": new_col,
+                "sample_diff": sample_diff[:10],
+            }
+
         # Set header
         ws.Cells(1, new_col).Value = header
 
-        # Set formula for data rows (vectorized in Excel COM, with row substitution if {r}/{row} are used)
+        # Set formula for data rows
         data_rng = ws.Range(ws.Cells(2, new_col), ws.Cells(last_row, new_col))
-        if "{r}" in formula_template or "{row}" in formula_template:
+        if is_structured:
+            formulas = [[transpile_structured_formula(formula_template, headers_map, r)] for r in range(2, last_row + 1)]
+            data_rng.Formula = formulas
+        elif "{r}" in formula_template or "{row}" in formula_template:
             formulas = [[formula_template.replace("{r}", str(r)).replace("{row}", str(r))] for r in range(2, last_row + 1)]
             data_rng.Formula = formulas
         else:
@@ -761,7 +933,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         start_r_idx = start_rng.Row
         curr_r = start_r_idx
 
-        with excel_fast_mode(self.app):
+        with excel_fast_mode(getattr(self, 'app', None)):
             # 1. Bloque de Parámetros de Entrada (si se especifican)
             param_cells: Dict[str, str] = {}
             if parameters:
@@ -1132,8 +1304,17 @@ class LiveExcelCOMBackend(BaseExcelBackend):
 
     @retry_on_excel_busy()
     def save(self, file_path: Optional[str] = None) -> str:
+        if file_path is None and bool(getattr(self.wb, "ReadOnly", False)):
+            wb_name = getattr(self.wb, "Name", "Workbook")
+            raise ExcelLockError(
+                f"No se puede guardar el libro '{wb_name}' porque fue abierto en modo de solo lectura (ReadOnly=True). "
+                f"Especifique un nuevo 'file_path' para Guardar Como o verifique bloqueos."
+            )
         if file_path:
-            abs_p = os.path.abspath(file_path)
+            if file_path.startswith(r"\\") or file_path.startswith("//"):
+                abs_p = file_path
+            else:
+                abs_p = os.path.abspath(file_path)
             self.wb.SaveAs(abs_p)
             return abs_p
         self.wb.Save()
@@ -1230,7 +1411,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
 
         duplicates_count = len(dup_row_indices)
         if duplicates_count > 0:
-            with excel_fast_mode(self.app):
+            with excel_fast_mode(getattr(self, 'app', None)):
                 for r in sorted(dup_row_indices, reverse=True):
                     if tbl:
                         tbl_row_idx = r - start_row
@@ -1376,7 +1557,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
                     "reason": f"Valor {fv} fuera de límites [{lower_bound:.2f}, {upper_bound:.2f}]"
                 })
 
-        with excel_fast_mode(self.app):
+        with excel_fast_mode(getattr(self, 'app', None)):
             if flagged_coords:
                 for chunk in _chunk_cell_addresses(flagged_coords):
                     try:
@@ -1569,7 +1750,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
                 new_row.append(val)
             modified_data.append(tuple(new_row))
 
-        with excel_fast_mode(self.app):
+        with excel_fast_mode(getattr(self, 'app', None)):
             if rules.get("trim_headers", True):
                 for c_idx in range(1, num_cols + 1):
                     h_val = ws.Cells(start_row, start_col + c_idx - 1).Value
@@ -1655,7 +1836,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
             }
 
         # 1. Lectura única a memoria bajo excel_fast_mode
-        with excel_fast_mode(self.app):
+        with excel_fast_mode(getattr(self, 'app', None)):
             raw_val = rng.Value
 
         if not isinstance(raw_val, (list, tuple)):
@@ -1927,7 +2108,7 @@ class LiveExcelCOMBackend(BaseExcelBackend):
                 })
 
         # 5. Volcado único a Excel COM bajo excel_fast_mode
-        with excel_fast_mode(self.app):
+        with excel_fast_mode(getattr(self, 'app', None)):
             full_matrix = [headers] + data_rows
             new_total_rows = len(full_matrix)
             new_data_rows_count = len(data_rows)
@@ -2025,7 +2206,19 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         }
 
     def close(self):
-        pass
+        try:
+            if getattr(self, "_owns_app", False) and self.app is not None:
+                try:
+                    wb_count = getattr(getattr(self.app, "Workbooks", None), "Count", 0)
+                except Exception:
+                    wb_count = 0
+                if wb_count == 0:
+                    try:
+                        self.app.Quit()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def wait_until_ready(self, timeout_sec: float = 10.0, retry_interval: float = 0.25) -> Dict[str, Any]:
         """
@@ -2285,3 +2478,477 @@ class LiveExcelCOMBackend(BaseExcelBackend):
         st = self.status()
         return not st.get("ready", True)
 
+    @retry_on_excel_busy()
+    def inspect_charts(self, sheet: Optional[str] = None) -> Dict[str, Any]:
+        """Inspecciona todos los gráficos en la hoja especificada o en el libro completo."""
+        from antigravity_excel_engine.operations.charts import parse_series_formula
+
+        sheets_to_inspect = []
+        if sheet:
+            sheets_to_inspect.append(self._get_sheet(sheet))
+        elif self.wb and hasattr(self.wb, "Sheets"):
+            for s in self.wb.Sheets:
+                sheets_to_inspect.append(s)
+
+        all_charts = []
+        for ws in sheets_to_inspect:
+            ws_name = getattr(ws, "Name", "")
+            try:
+                chart_objs = getattr(ws, "ChartObjects", None)
+                if callable(chart_objs):
+                    chart_objs = chart_objs()
+                count = getattr(chart_objs, "Count", 0) if chart_objs else 0
+                for idx in range(1, count + 1):
+                    co = chart_objs.Item(idx) if hasattr(chart_objs, "Item") else chart_objs(idx)
+                    c_name = getattr(co, "Name", f"Chart_{idx}")
+                    c_top = getattr(co, "Top", 0.0)
+                    c_left = getattr(co, "Left", 0.0)
+                    c_width = getattr(co, "Width", 0.0)
+                    c_height = getattr(co, "Height", 0.0)
+                    chart = getattr(co, "Chart", None)
+
+                    c_title = None
+                    c_type = None
+                    series_list = []
+
+                    if chart:
+                        try:
+                            if getattr(chart, "HasTitle", False):
+                                c_title = chart.ChartTitle.Text
+                        except Exception:
+                            pass
+                        try:
+                            c_type = getattr(chart, "ChartType", None)
+                        except Exception:
+                            pass
+                        try:
+                            sc = getattr(chart, "SeriesCollection", None)
+                            if callable(sc):
+                                sc = sc()
+                            sc_count = getattr(sc, "Count", 0) if sc else 0
+                            for s_idx in range(1, sc_count + 1):
+                                s = sc.Item(s_idx) if hasattr(sc, "Item") else sc(s_idx)
+                                s_name = getattr(s, "Name", None)
+                                s_formula = getattr(s, "Formula", "")
+                                s_axis = getattr(s, "AxisGroup", 1)
+                                parsed = parse_series_formula(s_formula) if s_formula else {}
+                                series_list.append({
+                                    "index": s_idx,
+                                    "name": s_name or parsed.get("name_ref", f"Serie {s_idx}"),
+                                    "formula": s_formula,
+                                    "x_range": parsed.get("x_range", ""),
+                                    "y_range": parsed.get("y_range", ""),
+                                    "axis_group": s_axis,
+                                })
+                        except Exception:
+                            pass
+
+                    all_charts.append({
+                        "name": str(c_name),
+                        "sheet": ws_name,
+                        "title": c_title,
+                        "chart_type": c_type,
+                        "top": c_top,
+                        "left": c_left,
+                        "width": c_width,
+                        "height": c_height,
+                        "series_count": len(series_list),
+                        "series": series_list,
+                    })
+            except Exception:
+                pass
+
+        return {
+            "status": "success",
+            "sheet": sheet,
+            "charts_count": len(all_charts),
+            "charts": all_charts,
+        }
+
+    @retry_on_excel_busy()
+    def extend_chart_series(
+        self,
+        to_col: Optional[str] = None,
+        to_row: Optional[int] = None,
+        sheet: Optional[str] = None,
+        charts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Extiende las series y rangos de categorías de los gráficos indicados."""
+        from antigravity_excel_engine.operations.charts import (
+            extend_range_reference,
+            parse_series_formula,
+        )
+
+        sheets_to_search = []
+        if sheet:
+            sheets_to_search.append(self._get_sheet(sheet))
+        elif self.wb and hasattr(self.wb, "Sheets"):
+            for s in self.wb.Sheets:
+                sheets_to_search.append(s)
+
+        target_chart_names = [c.lower() for c in charts] if charts else None
+        updated_series = []
+
+        for ws in sheets_to_search:
+            try:
+                chart_objs = getattr(ws, "ChartObjects", None)
+                if callable(chart_objs):
+                    chart_objs = chart_objs()
+                count = getattr(chart_objs, "Count", 0) if chart_objs else 0
+                for idx in range(1, count + 1):
+                    co = chart_objs.Item(idx) if hasattr(chart_objs, "Item") else chart_objs(idx)
+                    c_name = getattr(co, "Name", f"Chart_{idx}")
+                    if target_chart_names and str(c_name).lower() not in target_chart_names:
+                        continue
+
+                    chart = getattr(co, "Chart", None)
+                    if not chart:
+                        continue
+
+                    sc = getattr(chart, "SeriesCollection", None)
+                    if callable(sc):
+                        sc = sc()
+                    sc_count = getattr(sc, "Count", 0) if sc else 0
+                    for s_idx in range(1, sc_count + 1):
+                        s = sc.Item(s_idx) if hasattr(sc, "Item") else sc(s_idx)
+                        s_name = getattr(s, "Name", f"Series_{s_idx}")
+                        old_formula = getattr(s, "Formula", "")
+                        if not old_formula:
+                            continue
+
+                        parsed = parse_series_formula(old_formula)
+                        new_x = extend_range_reference(parsed["x_range"], to_col=to_col, to_row=to_row) if parsed["x_range"] else ""
+                        new_y = extend_range_reference(parsed["y_range"], to_col=to_col, to_row=to_row) if parsed["y_range"] else ""
+
+                        new_formula = f"=SERIES({parsed['name_ref']},{new_x},{new_y},{parsed['order']})"
+                        try:
+                            s.Formula = new_formula
+                        except Exception:
+                            if new_x:
+                                try:
+                                    s.XValues = new_x
+                                except Exception:
+                                    pass
+                            if new_y:
+                                try:
+                                    s.Values = new_y
+                                except Exception:
+                                    pass
+
+                        updated_series.append({
+                            "chart_name": str(c_name),
+                            "series_index": s_idx,
+                            "series_name": str(s_name),
+                            "old_formula": old_formula,
+                            "new_formula": new_formula,
+                        })
+            except Exception:
+                pass
+
+        return {
+            "status": "success",
+            "updated_count": len(updated_series),
+            "updated_series": updated_series,
+        }
+
+    @retry_on_excel_busy()
+    def update_chart_series(
+        self,
+        chart_name: str,
+        series_index: int,
+        x_range: Optional[str] = None,
+        y_range: Optional[str] = None,
+        name_ref: Optional[str] = None,
+        formula: Optional[str] = None,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Modifica directamente los parámetros o la fórmula de una serie de gráfico."""
+        from antigravity_excel_engine.operations.charts import parse_series_formula
+
+        sheets_to_search = []
+        if sheet:
+            sheets_to_search.append(self._get_sheet(sheet))
+        elif self.wb and hasattr(self.wb, "Sheets"):
+            for s in self.wb.Sheets:
+                sheets_to_search.append(s)
+
+        target_c = None
+        for ws in sheets_to_search:
+            try:
+                chart_objs = getattr(ws, "ChartObjects", None)
+                if callable(chart_objs):
+                    chart_objs = chart_objs()
+                count = getattr(chart_objs, "Count", 0) if chart_objs else 0
+                for idx in range(1, count + 1):
+                    co = chart_objs.Item(idx) if hasattr(chart_objs, "Item") else chart_objs(idx)
+                    c_name = getattr(co, "Name", "")
+                    if str(c_name).lower() == chart_name.lower():
+                        target_c = getattr(co, "Chart", None)
+                        break
+                if target_c:
+                    break
+            except Exception:
+                pass
+
+        if not target_c:
+            raise ValueError(f"Gráfico '{chart_name}' no encontrado en el libro.")
+
+        sc = getattr(target_c, "SeriesCollection", None)
+        if callable(sc):
+            sc = sc()
+        sc_count = getattr(sc, "Count", 0) if sc else 0
+        if series_index < 1 or series_index > sc_count:
+            raise IndexError(f"Índice de serie {series_index} fuera de rango (1 a {sc_count}).")
+
+        s = sc.Item(series_index) if hasattr(sc, "Item") else sc(series_index)
+        old_formula = getattr(s, "Formula", "")
+
+        if formula:
+            new_formula = formula
+            try:
+                s.Formula = new_formula
+            except Exception:
+                pass
+        else:
+            parsed = parse_series_formula(old_formula)
+            n_ref = name_ref if name_ref is not None else parsed.get("name_ref", "")
+            n_x = x_range if x_range is not None else parsed.get("x_range", "")
+            n_y = y_range if y_range is not None else parsed.get("y_range", "")
+            order = parsed.get("order", str(series_index))
+            new_formula = f"=SERIES({n_ref},{n_x},{n_y},{order})"
+            try:
+                s.Formula = new_formula
+            except Exception:
+                if x_range is not None:
+                    try:
+                        s.XValues = x_range
+                    except Exception:
+                        pass
+                if y_range is not None:
+                    try:
+                        s.Values = y_range
+                    except Exception:
+                        pass
+                if name_ref is not None:
+                    try:
+                        s.Name = name_ref
+                    except Exception:
+                        pass
+
+        return {
+            "status": "success",
+            "chart_name": chart_name,
+            "series_index": series_index,
+            "old_formula": old_formula,
+            "new_formula": new_formula,
+        }
+
+    @retry_on_excel_busy()
+    def inspect_workbook(
+        self,
+        sheet: Optional[str] = None,
+        include_charts: bool = True,
+    ) -> Dict[str, Any]:
+        """Inspecciona metadatos globales del libro y estructura detallada por hoja."""
+        st = self.status()
+        sheets_to_inspect = []
+        if sheet:
+            sheets_to_inspect.append(self._get_sheet(sheet))
+        elif self.wb and hasattr(self.wb, "Sheets"):
+            for s in self.wb.Sheets:
+                sheets_to_inspect.append(s)
+
+        sheets_detail = {}
+        for ws in sheets_to_inspect:
+            ws_name = getattr(ws, "Name", "")
+            try:
+                ur = getattr(ws, "UsedRange", None)
+                if ur:
+                    ur_addr = getattr(ur, "Address", "A1")
+                    if callable(ur_addr):
+                        ur_addr = ur_addr(False, False)
+                    used_range = str(ur_addr).replace("$", "")
+                    r_row = getattr(ur, "Row", 1)
+                    r_rows_cnt = getattr(getattr(ur, "Rows", None), "Count", 1)
+                    last_row = int(r_row + r_rows_cnt - 1)
+                    c_col = getattr(ur, "Column", 1)
+                    c_cols_cnt = getattr(getattr(ur, "Columns", None), "Count", 1)
+                    last_col_idx = int(c_col + c_cols_cnt - 1)
+                    last_col = get_column_letter(last_col_idx)
+                else:
+                    used_range = "A1"
+                    last_row = 1
+                    last_col_idx = 1
+                    last_col = "A"
+            except Exception:
+                used_range = "A1"
+                last_row = 1
+                last_col_idx = 1
+                last_col = "A"
+
+            headers = []
+            try:
+                r_start = int(getattr(ur, "Row", 1))
+                c_start = int(getattr(ur, "Column", 1))
+                row_range = ws.Range(ws.Cells(r_start, c_start), ws.Cells(r_start, last_col_idx))
+                vals = getattr(row_range, "Value", None)
+                if isinstance(vals, (list, tuple)):
+                    if len(vals) > 0 and isinstance(vals[0], (list, tuple)):
+                        headers = [str(v) if v is not None else "" for v in vals[0]]
+                    else:
+                        headers = [str(v) if v is not None else "" for v in vals]
+                elif vals is not None:
+                    headers = [str(vals)]
+            except Exception:
+                headers = []
+
+            tables = []
+            try:
+                list_objs = getattr(ws, "ListObjects", None)
+                if list_objs:
+                    for lo in list_objs:
+                        lo_addr = getattr(getattr(lo, "Range", None), "Address", "")
+                        if callable(lo_addr):
+                            lo_addr = lo_addr(False, False)
+                        rows_cnt = getattr(getattr(lo, "ListRows", None), "Count", 0)
+                        cols_cnt = getattr(getattr(lo, "ListColumns", None), "Count", 0)
+                        tables.append({
+                            "name": getattr(lo, "Name", "Table"),
+                            "range": str(lo_addr).replace("$", ""),
+                            "rows_count": rows_cnt,
+                            "columns_count": cols_cnt,
+                        })
+            except Exception:
+                pass
+
+            pivots = []
+            try:
+                pt_collection = getattr(ws, "PivotTables", None)
+                if callable(pt_collection):
+                    pt_collection = pt_collection()
+                if pt_collection:
+                    for pt in pt_collection:
+                        pt_addr = None
+                        try:
+                            if hasattr(pt, "TableRange2"):
+                                t_addr = getattr(pt.TableRange2, "Address", "")
+                                if callable(t_addr):
+                                    t_addr = t_addr(False, False)
+                                pt_addr = str(t_addr).replace("$", "")
+                        except Exception:
+                            pass
+                        pivots.append({
+                            "name": getattr(pt, "Name", "Pivot"),
+                            "range": pt_addr,
+                        })
+            except Exception:
+                pass
+
+            charts = []
+            if include_charts:
+                chart_res = self.inspect_charts(sheet=ws_name)
+                charts = chart_res.get("charts", [])
+
+            sheets_detail[ws_name] = {
+                "sheet_name": ws_name,
+                "used_range": used_range,
+                "last_row": last_row,
+                "last_col": last_col,
+                "headers": headers,
+                "tables": tables,
+                "pivots": pivots,
+                "charts": charts,
+            }
+
+        res = {
+            "status": "success",
+            "active_workbook": st.get("active_workbook"),
+            "full_name": st.get("full_name"),
+            "read_only": st.get("read_only", False),
+            "saved": st.get("saved", True),
+            "sheets": st.get("sheets", []),
+            "sheets_detail": sheets_detail,
+        }
+        if sheet and sheet in sheets_detail:
+            res.update(sheets_detail[sheet])
+        return res
+
+    @retry_on_excel_busy()
+    def create_table(
+        self,
+        range_str: str,
+        table_name: Optional[str] = None,
+        style: str = "TableStyleMedium9",
+        has_headers: bool = True,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with excel_fast_mode(getattr(self, 'app', None)):
+            ws = self._get_sheet(sheet)
+            target_rng = ws.Range(range_str)
+            # xlSrcRange = 1
+            # xlYes = 1, xlNo = 2
+            xl_headers = 1 if has_headers else 2
+            tbl = ws.ListObjects.Add(1, target_rng, None, xl_headers)
+            if table_name:
+                tbl.Name = table_name
+            if style:
+                try:
+                    tbl.TableStyle = style
+                except Exception:
+                    pass
+            return {
+                "status": "success",
+                "table_name": tbl.Name,
+                "range": get_com_clean_address(tbl.Range),
+                "sheet": ws.Name,
+                "style": style,
+                "columns_count": tbl.ListColumns.Count,
+                "rows_count": tbl.ListRows.Count + (1 if has_headers else 0),
+            }
+
+    @retry_on_excel_busy()
+    def list_tables(self, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
+        sheets = [self._get_sheet(sheet)] if sheet else [self.wb.Sheets(i) for i in range(1, self.wb.Sheets.Count + 1)]
+        tables_list = []
+        for ws in sheets:
+            for i in range(1, ws.ListObjects.Count + 1):
+                tbl = ws.ListObjects(i)
+                cols = [tbl.ListColumns(c).Name for c in range(1, tbl.ListColumns.Count + 1)]
+                tables_list.append({
+                    "name": tbl.Name,
+                    "range": get_com_clean_address(tbl.Range),
+                    "sheet": ws.Name,
+                    "columns": cols,
+                })
+        return tables_list
+
+    @retry_on_excel_busy()
+    def resize_table(
+        self,
+        table_name: str,
+        new_range: str,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with excel_fast_mode(getattr(self, 'app', None)):
+            sheets = [self._get_sheet(sheet)] if sheet else [self.wb.Sheets(i) for i in range(1, self.wb.Sheets.Count + 1)]
+            found_tbl = None
+            target_ws = None
+            for ws in sheets:
+                try:
+                    tbl = ws.ListObjects(table_name)
+                    found_tbl = tbl
+                    target_ws = ws
+                    break
+                except Exception:
+                    continue
+
+            if not found_tbl or not target_ws:
+                raise ValueError(f"Tabla '{table_name}' no encontrada en el libro activo.")
+
+            found_tbl.Resize(target_ws.Range(new_range))
+            return {
+                "status": "success",
+                "table_name": found_tbl.Name,
+                "new_range": new_range,
+                "sheet": target_ws.Name,
+            }
