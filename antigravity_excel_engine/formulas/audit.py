@@ -4,6 +4,7 @@ Auditoría y reconocimiento de errores de cálculo en fórmulas de Excel.
 """
 
 from typing import Any, Dict, List, Optional, Set, Union
+
 from ..utils.ranges import range_boundaries
 
 # Mapa de constantes de error de win32com (códigos numéricos HRESULT retornados por Excel en .Value)

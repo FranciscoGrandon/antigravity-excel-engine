@@ -158,9 +158,9 @@ def is_file_locked(file_path: str) -> bool:
 
     # Intento nativo en Windows vía pywin32
     try:
-        import win32file
-        import win32con
         import pywintypes
+        import win32con
+        import win32file
 
         handle = win32file.CreateFile(
             abs_path,
@@ -175,7 +175,7 @@ def is_file_locked(file_path: str) -> bool:
         return False
     except ImportError:
         pass
-    except Exception as e:
+    except Exception:
         # Si ocurre violación de compartición o error de permisos
         return True
 

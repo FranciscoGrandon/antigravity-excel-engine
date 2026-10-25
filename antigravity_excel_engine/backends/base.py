@@ -6,7 +6,7 @@ Define el contrato unificado para backends interactivos (Live COM) y de archivo 
 
 import re
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from antigravity_excel_engine.formatting.styles import FinancialStyleGuide
 
@@ -57,7 +57,8 @@ class BaseExcelBackend(ABC):
         sheet: Optional[str] = None,
         formulas: Optional[List[List[str]]] = None,
         styles: Optional[Dict[str, Any]] = None,
-        autofit: bool = False
+        autofit: bool = False,
+        dry_run: bool = False
     ) -> Dict[str, Any]:
         """Escribe una matriz rectangular de celdas a partir de una celda inicial."""
         pass
@@ -67,7 +68,8 @@ class BaseExcelBackend(ABC):
         self,
         cells_map: Dict[str, Dict[str, Any]],
         sheet: Optional[str] = None,
-        autofit: bool = False
+        autofit: bool = False,
+        dry_run: bool = False
     ) -> Dict[str, Any]:
         """Escribe celdas declarativas con valores, fórmulas y formatos individuales."""
         pass
@@ -97,7 +99,7 @@ class BaseExcelBackend(ABC):
     @abstractmethod
     def check_formula_errors(
         self,
-        range_str: str,
+        range_str: Optional[str] = None,
         sheet: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Audita y reporta errores de fórmulas en el rango."""
@@ -304,7 +306,8 @@ class BaseExcelBackend(ABC):
         formula_template: str,
         number_format: Optional[str] = FinancialStyleGuide.CURRENCY_FORMAT,
         sheet: Optional[str] = None,
-        autofit: bool = True
+        autofit: bool = True,
+        dry_run: bool = False
     ) -> Dict[str, Any]:
         """Inserta una columna calculada propagando fórmulas fila por fila."""
         pass
@@ -399,3 +402,96 @@ class BaseExcelBackend(ABC):
     ) -> Dict[str, Any]:
         """Despacha dinámicamente llamadas sobre el modelo de objetos COM."""
         pass
+
+    @abstractmethod
+    def inspect_workbook(
+        self,
+        sheet: Optional[str] = None,
+        include_charts: bool = True
+    ) -> Dict[str, Any]:
+        """Inspecciona metadatos globales del libro y estructura detallada por hoja."""
+        pass
+
+    @abstractmethod
+    def inspect_charts(
+        self,
+        sheet: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Inspecciona todos los gráficos en la hoja especificada o en el libro completo."""
+        pass
+
+    @abstractmethod
+    def extend_chart_series(
+        self,
+        to_col: Optional[str] = None,
+        to_row: Optional[int] = None,
+        sheet: Optional[str] = None,
+        charts: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Extiende las series y rangos de categorías de los gráficos indicados."""
+        pass
+
+    @abstractmethod
+    def update_chart_series(
+        self,
+        chart_name: str,
+        series_index: int,
+        x_range: Optional[str] = None,
+        y_range: Optional[str] = None,
+        name_ref: Optional[str] = None,
+        formula: Optional[str] = None,
+        sheet: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Modifica directamente los parámetros o la fórmula de una serie de gráfico."""
+        pass
+
+    @abstractmethod
+    def create_table(
+        self,
+        range_str: str,
+        table_name: Optional[str] = None,
+        style: str = "TableStyleMedium9",
+        has_headers: bool = True,
+        sheet: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Convierte un rango libre en tabla estructurada (ListObject)."""
+        pass
+
+    @abstractmethod
+    def list_tables(
+        self,
+        sheet: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Lista las tablas estructuradas existentes."""
+        pass
+
+    @abstractmethod
+    def resize_table(
+        self,
+        table_name: str,
+        new_range: str,
+        sheet: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Redimensiona una tabla estructurada existente."""
+        pass
+
+    def inspect_table_schema(
+        self,
+        table_or_range: str,
+        sheet: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Inspecciona y describe exhaustivamente el esquema de una tabla o rango."""
+        from antigravity_excel_engine.operations.grounding import inspect_table_schema
+        return inspect_table_schema(self, table_or_range=table_or_range, sheet=sheet)
+
+    def get_ai_grounding_context(
+        self,
+        table_or_range: str,
+        sheet: Optional[str] = None,
+        format: str = "json"
+    ) -> Union[str, Dict[str, Any]]:
+        """Serializa el esquema para inyección de grounding en LLMs."""
+        from antigravity_excel_engine.operations.grounding import get_ai_grounding_context
+        return get_ai_grounding_context(self, table_or_range=table_or_range, sheet=sheet, format=format)
+
+

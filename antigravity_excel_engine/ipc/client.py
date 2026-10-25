@@ -17,14 +17,14 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from antigravity_excel_engine.ipc.protocol import (
-    PIPE_NAME,
-    BUF_SIZE,
-    DEFAULT_TIMEOUT_MS,
-    START_TIMEOUT_SEC,
     ACTION_PING,
     ACTION_SHUTDOWN,
-    build_command_request,
+    BUF_SIZE,
+    DEFAULT_TIMEOUT_MS,
+    PIPE_NAME,
+    START_TIMEOUT_SEC,
     build_action_request,
+    build_command_request,
     build_error_response,
 )
 from antigravity_excel_engine.utils.logging import get_logger
@@ -32,9 +32,9 @@ from antigravity_excel_engine.utils.logging import get_logger
 logger = get_logger("ipc.client")
 
 try:
-    import win32pipe  # type: ignore
-    import win32file  # type: ignore
     import pywintypes  # type: ignore
+    import win32file  # type: ignore
+    import win32pipe  # type: ignore
 except ImportError:
     win32pipe = None
     win32file = None

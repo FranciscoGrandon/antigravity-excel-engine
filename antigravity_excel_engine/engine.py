@@ -29,11 +29,20 @@ from antigravity_excel_engine.operations import (
     create_chart,
     create_pivot_table,
     create_summary_table,
+    create_table,
     curate_pipeline,
     detect_and_flag_outliers,
+    extend_chart_series,
+    get_ai_grounding_context,
     get_range_as_csv,
+    inspect_charts,
+    inspect_table_schema,
+    inspect_workbook,
+    list_tables,
     read_ranges,
     remove_duplicates,
+    resize_table,
+    update_chart_series,
     write_cell_range,
     write_cells_declarative,
 )
@@ -207,11 +216,12 @@ class AntigravityExcelEngine:
         formulas: Optional[List[List[str]]] = None,
         styles: Optional[Dict[str, Any]] = None,
         autofit: bool = False,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Escribe una matriz rectangular de valores a partir de una celda de inicio."""
         return write_cell_range(
             self.backend, start_cell=start_cell, values=values,
-            sheet=sheet, formulas=formulas, styles=styles, autofit=autofit
+            sheet=sheet, formulas=formulas, styles=styles, autofit=autofit, dry_run=dry_run
         )
 
     def set_cells(
@@ -219,10 +229,11 @@ class AntigravityExcelEngine:
         cells_map: Dict[str, Dict[str, Any]],
         sheet: Optional[str] = None,
         autofit: bool = False,
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """Escritura declarativa de celdas individuales."""
         return write_cells_declarative(
-            self.backend, cells_map=cells_map, sheet=sheet, autofit=autofit
+            self.backend, cells_map=cells_map, sheet=sheet, autofit=autofit, dry_run=dry_run
         )
 
     def copy_paste_range(
@@ -306,12 +317,13 @@ class AntigravityExcelEngine:
         sheet: Optional[str] = None,
         col_format: Optional[str] = None,
         autofit: bool = True,
+        dry_run: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """Agrega una columna calculada con fórmula dinámica."""
         return add_calculated_column(
             self.backend, header=header, formula_template=formula_template,
-            sheet=sheet, col_format=col_format, autofit=autofit, **kwargs
+            sheet=sheet, col_format=col_format, autofit=autofit, dry_run=dry_run, **kwargs
         )
 
     # ─────────────────────────── Curation ───────────────────────────────────
@@ -455,6 +467,307 @@ class AntigravityExcelEngine:
         return self.backend.apply_style_preset(
             range_str=range_str, preset=p, sheet=sheet
         )
+
+    # ─────────────────────────── Introspección y Gráficos Avanzados ──────────
+
+    def inspect_workbook(
+        self,
+        sheet: Optional[str] = None,
+        include_charts: bool = True,
+    ) -> Dict[str, Any]:
+        """Inspecciona metadatos globales del libro y estructura detallada por hoja."""
+        return inspect_workbook(self.backend, sheet=sheet, include_charts=include_charts)
+
+    def inspect_charts(
+        self,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Inspecciona todos los gráficos en la hoja especificada o en el libro completo."""
+        return inspect_charts(self.backend, sheet=sheet)
+
+    def extend_chart_series(
+        self,
+        to_col: Optional[str] = None,
+        to_row: Optional[int] = None,
+        sheet: Optional[str] = None,
+        charts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Extiende las series y rangos de categorías de los gráficos indicados."""
+        return extend_chart_series(
+            self.backend, to_col=to_col, to_row=to_row, sheet=sheet, charts=charts
+        )
+
+    def update_chart_series(
+        self,
+        chart_name: str,
+        series_index: int,
+        x_range: Optional[str] = None,
+        y_range: Optional[str] = None,
+        name_ref: Optional[str] = None,
+        formula: Optional[str] = None,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Modifica directamente los parámetros o la fórmula de una serie de gráfico."""
+        return update_chart_series(
+            self.backend,
+            chart_name=chart_name,
+            series_index=series_index,
+            x_range=x_range,
+            y_range=y_range,
+            name_ref=name_ref,
+            formula=formula,
+            sheet=sheet,
+        )
+
+    # ─────────────────────────── Ejecución Batch Atómica ────────────────────
+
+    # ─────────────────────────── Copilot & Tables ─────────────────────────────
+
+    def create_table(
+        self,
+        range_str: str,
+        table_name: Optional[str] = None,
+        style: str = "TableStyleMedium9",
+        has_headers: bool = True,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Convierte un rango libre en tabla oficial ListObject."""
+        return create_table(
+            self.backend,
+            range_str=range_str,
+            table_name=table_name,
+            style=style,
+            has_headers=has_headers,
+            sheet=sheet,
+        )
+
+    def list_tables(self, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Lista todas las tablas estructuradas en la hoja especificada o en el libro."""
+        return list_tables(self.backend, sheet=sheet)
+
+    def resize_table(
+        self,
+        table_name: str,
+        new_range: str,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Redimensiona el rango de una tabla estructurada existente."""
+        return resize_table(
+            self.backend,
+            table_name=table_name,
+            new_range=new_range,
+            sheet=sheet,
+        )
+
+    def inspect_table_schema(
+        self,
+        table_or_range: str,
+        sheet: Optional[str] = None,
+        max_sample_rows: int = 1000,
+    ) -> Dict[str, Any]:
+        """Inspecciona y describe exhaustivamente el esquema de una tabla o rango."""
+        return inspect_table_schema(
+            self.backend,
+            table_or_range=table_or_range,
+            sheet=sheet,
+            max_sample_rows=max_sample_rows,
+        )
+
+    def get_ai_grounding_context(
+        self,
+        table_or_range: str,
+        sheet: Optional[str] = None,
+        format: str = "json",
+        max_sample_rows: int = 1000,
+    ) -> Union[str, Dict[str, Any]]:
+        """Serializa el esquema para inyección de contexto en prompts de LLMs."""
+        return get_ai_grounding_context(
+            self.backend,
+            table_or_range=table_or_range,
+            sheet=sheet,
+            format=format,
+            max_sample_rows=max_sample_rows,
+        )
+
+    def batch(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Ejecuta secuencialmente una lista de operaciones sobre la misma instancia del motor
+        y realiza un único save() al finalizar todas las operaciones.
+        """
+        results = []
+        for idx, op in enumerate(operations):
+            cmd = op.get("command") or op.get("cmd")
+            if not cmd:
+                raise ValueError(f"Operación en índice {idx} no especifica 'command'.")
+
+            args = op.get("args") if "args" in op else {k: v for k, v in op.items() if k != "command"}
+            res = self._execute_batch_op(cmd, args)
+            results.append({"command": cmd, "result": res})
+
+        saved_path = self.save()
+        return {
+            "status": "success",
+            "operations_executed": len(results),
+            "results": results,
+            "saved_to": saved_path,
+        }
+
+    def _execute_batch_op(self, cmd: str, args: Dict[str, Any]) -> Any:
+        """Despacha una operación individual dentro de un lote sin invocar save()."""
+        if cmd == "set-range":
+            return self.set_cell_range(
+                start_cell=args["start_cell"],
+                values=args["values"],
+                sheet=args.get("sheet"),
+                formulas=args.get("formulas"),
+                styles=args.get("styles"),
+                autofit=args.get("autofit", False),
+            )
+        elif cmd == "set-cells":
+            return self.set_cells(
+                cells_map=args["cells"],
+                sheet=args.get("sheet"),
+                autofit=args.get("autofit", False),
+            )
+        elif cmd == "copy-paste":
+            return self.copy_paste_range(
+                src=args["src"],
+                dst=args["dst"],
+                src_sheet=args.get("src_sheet"),
+                dst_sheet=args.get("dst_sheet"),
+                paste_type=args.get("paste_type", args.get("type", "all")),
+            )
+        elif cmd == "add-column":
+            return self.add_calculated_column(
+                range_str=args.get("range", ""),
+                header=args["header"],
+                formula=args["formula"],
+                sheet=args.get("sheet"),
+                number_format=args.get("number_format"),
+                autofit=args.get("autofit", True),
+            )
+        elif cmd == "create-pivot":
+            return self.create_pivot_table(
+                source=args.get("source"),
+                dest_sheet=args.get("dest_sheet", "Pivot"),
+                dest_cell=args.get("dest_cell", "A3"),
+                rows=args.get("rows"),
+                cols=args.get("cols"),
+                value_field=args.get("value_field"),
+                value_func=args.get("value_func", "sum"),
+                table_name=args.get("table_name"),
+                source_sheet=args.get("source_sheet"),
+                value_format=args.get("value_format"),
+            )
+        elif cmd == "create-chart":
+            return self.create_chart(
+                source=args.get("source"),
+                chart_type=args.get("chart_type", "column_clustered"),
+                dest_sheet=args.get("dest_sheet"),
+                dest_cell=args.get("anchor", args.get("dest_cell")),
+                title=args.get("title"),
+                sheet=args.get("source_sheet", args.get("sheet")),
+                width=args.get("width"),
+                height=args.get("height"),
+                placement=args.get("placement", "auto"),
+                anchor=args.get("anchor"),
+            )
+        elif cmd == "extend-chart-series":
+            return self.extend_chart_series(
+                to_col=args.get("to_col"),
+                to_row=args.get("to_row"),
+                sheet=args.get("sheet"),
+                charts=args.get("charts"),
+            )
+        elif cmd == "update-chart-series":
+            return self.update_chart_series(
+                chart_name=args["chart_name"],
+                series_index=int(args["series_index"]),
+                x_range=args.get("x_range"),
+                y_range=args.get("y_range"),
+                name_ref=args.get("name_ref"),
+                formula=args.get("formula"),
+                sheet=args.get("sheet"),
+            )
+        elif cmd == "apply-preset":
+            return self.apply_style_preset(
+                range_str=args["range"],
+                preset=args.get("preset", args.get("preset_name", "header")),
+                sheet=args.get("sheet"),
+            )
+        elif cmd == "summary-table":
+            return self.create_summary_table(
+                source_range=args.get("source", ""),
+                dest_sheet=args.get("dest_sheet"),
+                dest_cell=args.get("dest_cell", args.get("start_cell")),
+                sheet=args.get("sheet"),
+                title=args.get("title"),
+            )
+        elif cmd == "dedup":
+            return self.remove_duplicates(
+                range_or_table=args["source"],
+                key_columns=args.get("key_cols"),
+                sheet=args.get("sheet"),
+            )
+        elif cmd == "flag-outliers":
+            return self.detect_and_flag_outliers(
+                range_or_table=args.get("source"),
+                column=args["col"],
+                method=args.get("method", "iqr"),
+                sheet=args.get("sheet"),
+            )
+        elif cmd == "clean":
+            return self.clean_table_dataset(
+                target_range_or_table=args["source"],
+                rules=args.get("rules", {}),
+                sheet=args.get("sheet"),
+            )
+        elif cmd == "curate":
+            return self.curate_pipeline(
+                target_range_or_table=args["source"],
+                pipeline_spec=args.get("spec", {}),
+                sheet=args.get("sheet"),
+            )
+        elif cmd == "get-csv":
+            return self.get_range_as_csv(
+                range_str=args["range"],
+                sheet=args.get("sheet"),
+                delimiter=args.get("delimiter", ";"),
+            )
+        elif cmd == "get-ranges":
+            return self.get_cell_ranges(
+                ranges=args["ranges"],
+                sheet=args.get("sheet"),
+                include_formulas=args.get("formulas", False),
+            )
+        elif cmd == "inspect-workbook":
+            return self.inspect_workbook(
+                sheet=args.get("sheet"),
+                include_charts=args.get("include_charts", True),
+            )
+        elif cmd == "inspect-charts":
+            return self.inspect_charts(
+                sheet=args.get("sheet"),
+            )
+        elif cmd in ("create-table", "create_table"):
+            return self.create_table(
+                range_str=args.get("range_str") or args.get("range", ""),
+                table_name=args.get("table_name") or args.get("name"),
+                style=args.get("style", "TableStyleMedium9"),
+                has_headers=args.get("has_headers", True),
+                sheet=args.get("sheet"),
+            )
+        elif cmd in ("list-tables", "list_tables"):
+            return self.list_tables(sheet=args.get("sheet"))
+        elif cmd in ("inspect-table", "inspect_table"):
+            return self.inspect_table_schema(
+                table_or_range=args.get("table_or_range") or args.get("range") or args.get("table", ""),
+                sheet=args.get("sheet"),
+            )
+        elif cmd == "status":
+            return self.status()
+        else:
+            raise ValueError(f"Comando batch no reconocido: '{cmd}'")
 
     # ─────────────────────────── Compatibilidad ─────────────────────────────
 

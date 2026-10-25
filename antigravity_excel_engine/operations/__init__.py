@@ -10,12 +10,24 @@ Cada módulo encapsula un dominio funcional independiente:
   - charts:    tablas dinámicas, gráficos y tablas de resumen
 """
 
-from .read import read_ranges, get_range_as_csv
-from .write import write_cell_range, write_cells_declarative, copy_paste_range
+from .aggregate import add_calculated_column, aggregate, compute_aggregation_metric
 from .audit import audit_data_quality, check_formula_errors, detect_and_flag_outliers
-from .aggregate import aggregate, add_calculated_column
-from .curation import remove_duplicates, clean_table_dataset, curate_pipeline
-from .charts import create_pivot_table, create_chart, create_summary_table
+from .charts import (
+    create_chart,
+    create_pivot_table,
+    create_summary_table,
+    extend_chart_series,
+    extend_range_reference,
+    inspect_charts,
+    inspect_workbook,
+    parse_series_formula,
+    update_chart_series,
+)
+from .curation import clean_table_dataset, curate_pipeline, remove_duplicates
+from .grounding import get_ai_grounding_context, inspect_table_schema
+from .read import get_range_as_csv, read_ranges
+from .tables import create_table, list_tables, resize_table
+from .write import copy_paste_range, write_cell_range, write_cells_declarative
 
 __all__ = [
     "read_ranges",
@@ -27,6 +39,7 @@ __all__ = [
     "check_formula_errors",
     "detect_and_flag_outliers",
     "aggregate",
+    "compute_aggregation_metric",
     "add_calculated_column",
     "remove_duplicates",
     "clean_table_dataset",
@@ -34,4 +47,16 @@ __all__ = [
     "create_pivot_table",
     "create_chart",
     "create_summary_table",
+    "inspect_charts",
+    "extend_chart_series",
+    "update_chart_series",
+    "inspect_workbook",
+    "parse_series_formula",
+    "extend_range_reference",
+    "create_table",
+    "list_tables",
+    "resize_table",
+    "inspect_table_schema",
+    "get_ai_grounding_context",
 ]
+

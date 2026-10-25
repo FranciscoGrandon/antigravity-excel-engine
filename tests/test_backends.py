@@ -19,6 +19,7 @@ from antigravity_excel_engine.backends import (
     excel_fast_mode,
     get_com_clean_address,
 )
+from antigravity_excel_engine.models.errors import ExcelLockError
 import antigravity_excel_core as legacy_core
 
 
@@ -184,6 +185,87 @@ class TestLiveCOMBackendUnit(unittest.TestCase):
         self.assertTrue(mock_app.EnableEvents)
         self.assertEqual(mock_app.Calculation, -4105)
         mock_app.Calculate.assert_called_once()
+
+    def test_init_workbook_unc_path_and_readonly_args(self):
+        backend = object.__new__(LiveExcelCOMBackend)
+        mock_app = MagicMock()
+        mock_wb = MagicMock()
+        mock_workbooks = MagicMock()
+        mock_workbooks.__iter__.return_value = [mock_wb]
+        mock_workbooks.Open = MagicMock(return_value=mock_wb)
+        mock_app.Workbooks = mock_workbooks
+        mock_wb.FullName = "C:\\Other\\file.xlsx"
+        mock_wb.Name = "file.xlsx"
+        backend.app = mock_app
+
+        unc_path = r"\\servidor\recurso\datos.xlsx"
+        with patch("os.path.exists", return_value=True):
+            wb = backend._init_workbook(unc_path)
+            self.assertIs(wb, mock_wb)
+            mock_app.Workbooks.Open.assert_called_with(unc_path, 0, False)
+
+    def test_owns_app_lifecycle_and_clean_quit(self):
+        backend = object.__new__(LiveExcelCOMBackend)
+        mock_app = MagicMock()
+        backend.app = mock_app
+
+        # Caso 1: _owns_app=False -> no debe llamar a Quit()
+        backend._owns_app = False
+        mock_app.Workbooks.Count = 0
+        backend.close()
+        mock_app.Quit.assert_not_called()
+
+        # Caso 2: _owns_app=True pero Workbooks.Count > 0 -> no debe llamar a Quit()
+        backend._owns_app = True
+        mock_app.Workbooks.Count = 2
+        backend.close()
+        mock_app.Quit.assert_not_called()
+
+        # Caso 3: _owns_app=True y Workbooks.Count == 0 -> debe llamar a Quit() limpiamente
+        backend._owns_app = True
+        mock_app.Workbooks.Count = 0
+        backend.close()
+        mock_app.Quit.assert_called_once()
+
+    def test_status_enrichment_keys(self):
+        backend = object.__new__(LiveExcelCOMBackend)
+        mock_wb = MagicMock()
+        mock_wb.Name = "Libro1.xlsx"
+        mock_wb.FullName = "C:\\Datos\\Libro1.xlsx"
+        mock_wb.ReadOnly = False
+        mock_wb.Saved = True
+        mock_wb.ActiveSheet.Name = "Hoja1"
+        mock_s1 = MagicMock()
+        mock_s1.Name = "Hoja1"
+        mock_wb.Sheets = [mock_s1]
+        backend.wb = mock_wb
+
+        st = backend.status()
+        self.assertEqual(st["backend"], "live_com")
+        self.assertEqual(st["active_workbook"], "Libro1.xlsx")
+        self.assertEqual(st["full_name"], "C:\\Datos\\Libro1.xlsx")
+        self.assertFalse(st["read_only"])
+        self.assertTrue(st["saved"])
+        self.assertEqual(st["active_sheet"], "Hoja1")
+        self.assertEqual(st["sheets"], ["Hoja1"])
+
+    def test_save_readonly_raises_excel_lock_error(self):
+        backend = object.__new__(LiveExcelCOMBackend)
+        mock_wb = MagicMock()
+        mock_wb.Name = "Protegido.xlsx"
+        mock_wb.ReadOnly = True
+        backend.wb = mock_wb
+
+        # Guardar sin file_path en modo ReadOnly=True debe lanzar ExcelLockError
+        with self.assertRaises(ExcelLockError):
+            backend.save(file_path=None)
+
+        # Guardar con file_path debe llamar SaveAs y tener éxito
+        mock_wb.SaveAs = MagicMock()
+        res = backend.save(file_path="C:\\Copia.xlsx")
+        self.assertIn("Copia.xlsx", res)
+        mock_wb.SaveAs.assert_called_once()
+
 
 
 class TestLegacyReexportCompatibility(unittest.TestCase):

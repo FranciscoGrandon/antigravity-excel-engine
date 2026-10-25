@@ -8,7 +8,102 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-25
+
+### Añadido
+- **Optimización de Rendimiento, Precisión Numérica y Fórmulas Estructuradas:**
+  - **Pruebas Automatizadas de Precisión y Performance (`tests/test_copilot_features.py`):**
+    - 6 nuevas pruebas en `TestPerformanceAndPrecisionOptimizations` validando agregación de columnas completas, protección de cadenas con comillas, sintaxis formal `[#This Row]`, inferencia de textos numéricos/RUTs, transposición y muestreo matricial, y precisión IEEE 754 de `math.fsum`.
+    - Total de la suite ampliado a 137 pruebas unitarias aprobadas al 100%.
+  - **Función de Métrica Precisa (`operations/aggregate.py`):**
+    - `compute_aggregation_metric(values, agg_func)`: agregación precisa con `math.fsum` sanitizando `None`, vacíos o valores no numéricos.
+    - Exportación canónica en `antigravity_excel_engine/__init__.py` y `antigravity_excel_engine/operations/__init__.py`.
+  - **Muestreo Inteligente de Esquemas en AI Grounding (`operations/grounding.py`):**
+    - Parámetro opcional `max_sample_rows: int = 1000` en `inspect_table_schema`, `get_ai_grounding_context` y fachada `AntigravityExcelEngine`.
+
+### Cambiado
+- **Transpilador de Fórmulas Estructuradas (`formulas/structured.py`):**
+  - Protección estricta de literales de texto entre comillas dobles, impidiendo sustituciones accidentales dentro de cadenas.
+  - Soporte de sintaxis formal de fila actual: `[@Col]`, `[@[Col con espacios]]`, `Tabla[@Col]`, `Tabla[@[Col con espacios]]` y sintaxis estándar `Tabla[[#This Row],[Col]]` o `[[#This Row],[Col]]`.
+  - Referencias a columnas completas para agregación: `=SUM([Ventas])` o `=AVERAGE(Tabla[Precio])` con resolución de rangos verticales vía `row_bounds` o `table_range` (ej. `B$2:B$50`) o formato de columna completa `B:B`.
+- **Rendimiento Matricial en AI Grounding (`operations/grounding.py`):**
+  - Transposición matricial vectorizada en un solo paso con `zip(*data_rows)` en `inspect_table_schema`, eliminando bucles celda a celda $C \times N$.
+  - Muestreo uniforme/inicial para tablas extensas que exceden `max_sample_rows`, manteniendo el uso de memoria y CPU acotados.
+- **Precisión Aritmética de Agregación (`operations/aggregate.py`, `backends/headless.py`, `backends/live_com.py`):**
+  - Reemplazo de `sum()` por `math.fsum` en el cálculo de `sum` y `avg` tanto en operaciones como en backends, erradicando imprecisiones por representación de coma flotante IEEE 754.
+- **Rendimiento GUI Live COM (`backends/live_com.py`):**
+  - Envolvimiento de `create_table` y `resize_table` con el context manager `with excel_fast_mode(self.app):` para suprimir el repintado de pantalla y acelerar la creación de tablas estructuradas.
+- **Latencia CLI (`cli.py`):**
+  - Valor por defecto de timeout en `_try_daemon` y en el despacho de rutas no-UNC establecido en `DEFAULT_TIMEOUT_MS` (1000 ms).
+
+### Corregido
+- **Velocidad de la Suite de Pruebas (`tests/test_introspection_and_charts.py`):**
+  - Corrección del mock de `sys.exit` con `side_effect=SystemExit` en `test_cli_unc_path_sets_60s_timeout_for_daemon`, eliminando la ejecución espuria del fallback standalone sobre rutas UNC y reduciendo la duración del test de 10.27s a 0.00s.
+  - Tiempo total de ejecución de la suite de pruebas completa reducido de 12.83s a 2.20s (< 3.5 segundos requeridos).
+- **Inferencia Semántica de Tipos (`operations/grounding.py`):**
+  - Identificación rigurosa de cadenas numéricas con ceros a la izquierda (`"00123"`, `"0987"`) y valores con guiones como RUTs o teléfonos (`"12345678-9"`) clasificándolos como `text` en lugar de `integer`.
+
+
+### Añadido
+- **Capacidades Copilot en Antigravity Excel Engine:**
+  - **AI Grounding & Table Schemas (`operations/grounding.py`):**
+    - `inspect_table_schema(backend, table_or_range, sheet=None)`: inspección exhaustiva de metadatos de tabla/rango, dimensiones y columnas con inferencia automática de tipos (`integer`, `float`, `date`, `currency`, `boolean`, `text`), conteo de no nulos, nulos, muestra de 3 valores representativos, rango min/max y detección de fórmulas.
+    - `get_ai_grounding_context(backend, table_or_range, sheet=None, format="json"|"markdown")`: serialización ultraligera estructurada en JSON o tablas Markdown optimizada para inyección directa en prompts de LLMs con costo mínimo de tokens.
+  - **Gestión de Tablas de Excel `ListObject` (`operations/tables.py`):**
+    - `create_table(backend, range_str, table_name=None, style="TableStyleMedium9", has_headers=True, sheet=None)`: conversión oficial de rangos libres en tablas estructuradas tanto en Live COM (`ListObjects.Add`) como en Headless OpenPyXL (`openpyxl.worksheet.table.Table` y `ws.add_table()`), con población automática de `tableColumns`.
+    - `list_tables(backend, sheet=None)`: listado de todas las tablas estructuradas con nombre, rango, hoja y nombres de columnas.
+    - `resize_table(backend, table_name, new_range, sheet=None)`: redimensionamiento de tablas estructuradas con sincronización de columnas.
+  - **Transpilador de Fórmulas Estructuradas (`formulas/structured.py`):**
+    - `transpile_structured_formula(formula, headers_map, row_idx)`: traducción de sintaxis de referencias estructuradas de tablas como `=[@Ventas] - [@Costos]` o `=[@[Precio Unitario]] * [@Cantidad]` a coordenadas relativas como `=B2 - C2`.
+    - Integración nativa en `add_calculated_column` en Headless OpenPyXL y Live COM para expansión automática de columnas con sintaxis estructurada.
+  - **Modo Dry-Run / Previsualización Especulativa:**
+    - Parámetro opcional `dry_run: bool = False` en `set_cells`, `set_cell_range` y `add_calculated_column`.
+    - Simulación segura sin alterar celdas ni libros en memoria ni en disco, retornando `dry_run=True`, `affected_cells_count`, `target_range` y `sample_diff` de celdas afectadas con valores anteriores, nuevos y fórmulas.
+  - **Integración en Facade, CLI e IPC:**
+    - Exposición de métodos en `BaseExcelBackend`, `LiveExcelCOMBackend`, `HeadlessOpenPyXLBackend` y la fachada `AntigravityExcelEngine`.
+    - Re-exportación completa en `antigravity_excel_engine/__init__.py` y `antigravity_excel_engine/operations/__init__.py`.
+    - Soporte en CLI (`cli.py`) con comandos `inspect-table`, `create-table` y bandera `--dry-run` en `set-range`, `set-cells` y `add-column`.
+    - Soporte en protocolo IPC (`ipc/protocol.py`) y despachador del daemon (`ipc/daemon.py`).
+  - **Suite de Pruebas Unitarias (`tests/test_copilot_features.py`):**
+    - 23 nuevas pruebas unitarias cubriendo transpilación de fórmulas, creación/listado/redimensionado de tablas, schemas semánticos, grounding en JSON/Markdown, inyección calculada estructurada, dry-run y mocks de Live COM.
+    - 131/131 pruebas aprobadas al 100% en pytest (código de salida 0).
+- **Fases 1 y 2 de Optimización y Rendimiento de Excel Engine (`plan_mejora_performance_excel_engine.md`):**
+  - **Blindaje y Ciclo de Vida en `LiveExcelCOMBackend` (`backends/live_com.py`):**
+    - Preservación íntegra de rutas UNC de red (`\\...`) sin manipulación indebida de letras de unidad en `_init_workbook`.
+    - Apertura segura con parámetros explícitos `Workbooks.Open(abs_p, 0, False)` y fallback defensivo con reintentos.
+    - Registro y seguimiento de propiedad de la instancia de Excel vía `self._owns_app`; cierre limpio mediante `app.Quit()` únicamente si la instancia fue creada por el motor y `Workbooks.Count == 0`, evitando el cierre intempestivo de libros abiertos del usuario.
+    - Enriquecimiento del comando `status()` retornando `full_name`, `read_only` y `saved` del libro activo.
+    - Control de guardado de solo lectura levantando `ExcelLockError` al invocar `save(None)` sobre libros con bandera `ReadOnly=True`.
+  - **Introspección y Manipulación de Series de Gráficos (`operations/charts.py`, `backends/` y `engine.py`):**
+    - Implementación de `inspect_workbook` tanto en Live COM como Headless: inspecciona metadatos, hojas, visibilidad, dimensiones, tablas estructuradas y conteo de gráficos.
+    - Implementación de `inspect_charts`: lista y describe todos los gráficos existentes por hoja con títulos, tipos y series detalladas (valores, categorías y nombres).
+    - Implementación de `extend_chart_series`: extiende rangos de series de datos vertical u horizontalmente sin alterar propiedades visuales del gráfico.
+    - Implementación de `update_chart_series`: actualiza rangos de valores o categorías para una serie específica por índice o nombre.
+    - Parser robusto de fórmulas `SERIES(...)` en `parse_series_formula`, tolerante a hojas con comas, comillas simples, paréntesis y argumentos nulos.
+    - Despliegue en `BaseExcelBackend`, `LiveExcelCOMBackend`, `HeadlessOpenPyXLBackend` y delegación en `AntigravityExcelEngine`.
+  - **CLI, Operaciones por Lotes (Batch) e Integración IPC (`cli.py`, `ipc/`):**
+    - Nuevos subcomandos en CLI: `inspect-workbook`, `inspect-charts`, `extend-chart-series`, `update-chart-series` y `batch`.
+    - Comando `batch`: ejecución secuencial de múltiples operaciones dentro del motor con un único guardado al final (`save()`), reduciendo la latencia de I/O en flujos complejos.
+    - Registro de comandos en `COMMANDS` y `VALID_COMMANDS` (`ipc/protocol.py`) y despacho en `AntigravityExcelDaemon._execute_command` (`ipc/daemon.py`).
+    - Detección de rutas UNC en CLI con timeout ampliado a 60 segundos (`60000ms`) en `_try_daemon` para prevenir cancelaciones prematuras en unidades de red lentas.
+  - **Pruebas Automatizadas (`tests/test_introspection_and_charts.py` y `tests/test_backends.py`):**
+    - 13 pruebas unitarias nuevas cubriendo parsing de fórmulas `SERIES`, extensión de rangos en gráficos openpyxl, introspección de libros, llamadas batch, subcomandos CLI y timeout UNC.
+    - Total de 108/108 pruebas aprobadas al 100% en pytest.
+
+- **Suite de Pruebas E2E de Flujos Completos en Pipelines de Datos (`tests/test_e2e_pipeline.py`):**
+  - Implementación de 4 pruebas de integración y pipelines de punta a punta con `AntigravityExcelEngine` en modo headless (`mode="file"`):
+    1. `test_e2e_full_lifecycle_data_table`: Ciclo de vida completo de 9 pasos sobre dataset operativo `Ventas_Agua` (inyección cruda, auditoría inicial, curación compuesta con `curate_pipeline`, re-auditoría, inyección de 3 columnas calculadas encadenadas con fórmulas dinámicas, verificación de errores de fórmulas, agregación analítica, creación de tabla dinámica y gráfico sin solapamiento, aplicación de estilo corporativo, escritura declarativa de celdas, copia de rangos y exportación CSV).
+    2. `test_e2e_chained_formula_injection_and_resize`: Inyección encadenada de fórmulas interdependientes con expansión dinámica de tabla de 3 a 6 columnas y redimensionamiento automático de rango de tabla abierta (`openpyxl.worksheet.table.Table`).
+    3. `test_e2e_curate_aggregate_and_pivot_flow`: Flujo integrado de curación de datos sucios (eliminación de duplicados, normalización de texto y fechas), agregación analítica multivariable y generación cruzada de tabla dinámica y gráfico en hoja separada.
+    4. `test_e2e_declarative_scenario_and_styling`: Construcción de escenarios de simulación con entradas de supuestos, celdas de impacto dinámico, aplicación de presets visuales corporativos (`header`, `input_cell`, `total_row`) y exportación a CSV con delimitador personalizado.
+- **Caso Práctico Reproducible de Flujo Integral (`pruebas/9_Flujo_Integral_Combinado/`):**
+  - Script ejecutor demostrativo `ejecutar_prueba_integral.py` para la orquestación secuencial de 9 etapas avanzadas sobre facturación sanitaria de Biobío y Ñuble.
+  - Generación del libro Excel procesado `Facturacion_Agua_PROCESADO.xlsx` (14.7 KB, 3 hojas: `Datos_Facturacion`, `Resumen_Zonal` y `Escenario_Tarifario`, con tabla estructurada `TblFacturacion` expandida a `A1:K55`, gráfico nativo y formato corporativo).
+  - Documentación de la Prueba 9 en [`pruebas/BITACORA_PRUEBAS.md`](file:///d:/Users/francisco.grandon/OneDrive%20-%20essbio/Documentos/ANTIGRAVITY/EXCEL_ENGINE/pruebas/BITACORA_PRUEBAS.md).
+
 ### Corregido y Optimizado
+- **Mapeo de Parámetros en `copy_paste_range` (`operations/write.py`):**
+  - Corrección de mapeo de argumentos entre `operations.write.copy_paste_range` y `BaseExcelBackend.copy_paste_range`, transformando adecuadamente `source_range` a `src_range` y `dest_cell` a `dst_start_cell`, habilitando el funcionamiento idéntico en `AntigravityExcelEngine.copy_paste_range` sin discrepancias de firma.
 - **Rendimiento e Integración Live COM en Tiempo Real (`excel_engine`):**
   - **Optimización Matricial de `audit_data_quality`:** Sustitución de bucles celda a celda en COM (~11,200 llamadas RPC) por lectura bidimensional en un solo viaje COM (`Range.Value` y `Range.Formula`) procesada vectorialmente en memoria local, reduciendo el tiempo de auditoría de ~4.5s a <15ms.
   - **Corrección de Dirección COM:** Corrección de error `TypeError: 'str' object is not callable` al invocar `target_rng.Address(False, False)` en win32com, unificando el acceso con `get_com_clean_address()`.

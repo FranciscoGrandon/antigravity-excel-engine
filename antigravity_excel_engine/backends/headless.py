@@ -4,14 +4,15 @@ Backend Headless OpenPyXL de Antigravity Excel Engine.
 Manipulación fuera de pantalla y en disco de archivos .xlsx sin requerir Microsoft Excel instalado.
 """
 
+import csv
+import math
+import datetime
+import io
 import os
 import re
-import io
-import csv
-import time
-import datetime
 import statistics
-from typing import List, Dict, Any, Optional, Union
+import time
+from typing import Any, Dict, List, Optional, Union
 
 # Lazy Loaders para openpyxl, estilos, comentarios y módulos secundarios
 _openpyxl_module = None
@@ -98,23 +99,27 @@ def _get_win32con():
     return win32con
 
 
-from .base import BaseExcelBackend
-from antigravity_excel_engine.utils.ranges import (
-    coordinate_from_string,
-    column_index_from_string,
-    get_column_letter,
-    range_boundaries,
-)
-from antigravity_excel_engine.utils.dates import parse_excel_date_serial
 from antigravity_excel_engine.formatting import (
     FinancialStyleGuide,
     apply_style_preset_openpyxl,
 )
 from antigravity_excel_engine.formulas import (
-    sanitize_formula_compatibility,
+    STRUCTURED_REF_REGEX,
     audit_openpyxl_formula_errors,
     propagate_formula_row,
+    sanitize_formula_compatibility,
+    transpile_structured_formula,
 )
+from antigravity_excel_engine.utils.dates import parse_excel_date_serial
+from antigravity_excel_engine.utils.ranges import (
+    column_index_from_string,
+    coordinate_from_string,
+    get_column_letter,
+    range_boundaries,
+)
+
+from .base import BaseExcelBackend
+
 
 class HeadlessOpenPyXLBackend(BaseExcelBackend):
     def __init__(self, file_path: Optional[str] = None):
@@ -167,11 +172,16 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
         return self.wb.active
 
     def status(self) -> Dict[str, Any]:
+        wb_name = os.path.basename(self.file_path) if self.file_path else None
         return {
             "backend": "headless_openpyxl",
             "file": self.file_path,
-            "active_sheet": self.wb.active.title if self.wb.active else None,
-            "sheets": self.wb.sheetnames
+            "full_name": self.file_path,
+            "active_workbook": wb_name,
+            "active_sheet": self.wb.active.title if (self.wb and self.wb.active) else None,
+            "sheets": self.wb.sheetnames if self.wb else [],
+            "read_only": False,
+            "saved": True,
         }
 
     def get_cell_ranges(self, ranges: List[str], sheet: Optional[str] = None, include_formulas: bool = False, include_styles: bool = False) -> Dict[str, Any]:
@@ -202,22 +212,56 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
                 res[r]["formulas"] = forms
         return res
 
-    def set_cell_range(self, start_cell: str, values: List[List[Any]], sheet: Optional[str] = None, formulas: Optional[List[List[str]]] = None, styles: Optional[Dict[str, Any]] = None, autofit: bool = False) -> Dict[str, Any]:
+    def set_cell_range(self, start_cell: str, values: List[List[Any]], sheet: Optional[str] = None, formulas: Optional[List[List[str]]] = None, styles: Optional[Dict[str, Any]] = None, autofit: bool = False, dry_run: bool = False) -> Dict[str, Any]:
         ws = self._get_sheet(sheet)
         start_col, start_row = coordinate_from_string(start_cell)
         start_col_idx = column_index_from_string(start_col)
 
-        data = formulas if formulas else values
-        if not data:
+        if not values and not formulas:
             return {"status": "error", "message": "No data provided"}
 
-        for r_idx, row in enumerate(data):
-            for c_idx, val in enumerate(row):
-                cell = ws.cell(row=start_row + r_idx, column=start_col_idx + c_idx)
-                if isinstance(val, str) and val.startswith("="):
-                    cell.value = sanitize_formula_compatibility(val)
+        row_count = len(values) if values else (len(formulas) if formulas else 0)
+        col_count = len(values[0]) if (values and len(values) > 0) else (len(formulas[0]) if (formulas and len(formulas) > 0) else 0)
+        end_col_letter = get_column_letter(start_col_idx + col_count - 1)
+        end_row = start_row + row_count - 1
+        target_range = f"{start_col}{start_row}:{end_col_letter}{end_row}"
+
+        sample_diff = []
+        for r_idx in range(row_count):
+            for c_idx in range(col_count):
+                curr_coord = f"{get_column_letter(start_col_idx + c_idx)}{start_row + r_idx}"
+                old_val = ws[curr_coord].value
+                val = values[r_idx][c_idx] if values and r_idx < len(values) and c_idx < len(values[r_idx]) else None
+                form = formulas[r_idx][c_idx] if formulas and r_idx < len(formulas) and c_idx < len(formulas[r_idx]) else None
+
+                if form and isinstance(form, str) and form.startswith("="):
+                    final_val = sanitize_formula_compatibility(form)
+                    is_form = True
                 else:
-                    cell.value = val
+                    final_val = val
+                    is_form = isinstance(val, str) and val.startswith("=")
+                    if is_form:
+                        final_val = sanitize_formula_compatibility(val)
+
+                if dry_run:
+                    sample_diff.append({
+                        "cell": curr_coord,
+                        "old_value": old_val,
+                        "new_value": final_val if not is_form else None,
+                        "formula": final_val if is_form else None,
+                    })
+                else:
+                    cell = ws.cell(row=start_row + r_idx, column=start_col_idx + c_idx)
+                    cell.value = final_val
+
+        if dry_run:
+            return {
+                "status": "success",
+                "dry_run": True,
+                "affected_cells_count": row_count * col_count,
+                "target_range": target_range,
+                "sample_diff": sample_diff[:10],
+            }
 
         if autofit:
             for col in ws.columns:
@@ -225,10 +269,40 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
                 col_letter = get_column_letter(col[0].column)
                 ws.column_dimensions[col_letter].width = max(max_len + 3, 10)
 
-        return {"status": "success", "rows": len(data), "cols": len(data[0]) if data else 0}
+        return {"status": "success", "rows": row_count, "cols": col_count}
 
-    def set_cells(self, cells_map: Dict[str, Dict[str, Any]], sheet: Optional[str] = None, autofit: bool = False) -> Dict[str, Any]:
+    def set_cells(self, cells_map: Dict[str, Dict[str, Any]], sheet: Optional[str] = None, autofit: bool = False, dry_run: bool = False) -> Dict[str, Any]:
         ws = self._get_sheet(sheet)
+        if dry_run:
+            sample_diff = []
+            for coord, cell_info in cells_map.items():
+                old_val = ws[coord].value
+                new_formula = None
+                new_val = None
+                if "formula" in cell_info and cell_info["formula"]:
+                    new_formula = sanitize_formula_compatibility(cell_info["formula"])
+                elif "value" in cell_info:
+                    val = cell_info["value"]
+                    if isinstance(val, str) and val.startswith("="):
+                        new_formula = sanitize_formula_compatibility(val)
+                    else:
+                        new_val = val
+                sample_diff.append({
+                    "cell": coord,
+                    "old_value": old_val,
+                    "new_value": new_val,
+                    "formula": new_formula,
+                })
+            coords = list(cells_map.keys())
+            target_range = f"{coords[0]}:{coords[-1]}" if len(coords) > 1 else (coords[0] if coords else "")
+            return {
+                "status": "success",
+                "dry_run": True,
+                "affected_cells_count": len(cells_map),
+                "target_range": target_range,
+                "sample_diff": sample_diff[:10],
+            }
+
         for coord, cell_info in cells_map.items():
             cell = ws[coord]
             if "formula" in cell_info and cell_info["formula"]:
@@ -302,9 +376,10 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
 
         return {"status": "success", "source": src_range, "destination": dst_start_cell}
 
-    def check_formula_errors(self, range_str: str, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
+    def check_formula_errors(self, range_str: Optional[str] = None, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
         ws = self._get_sheet(sheet)
-        return audit_openpyxl_formula_errors(ws, range_str)
+        target_range = range_str or f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
+        return audit_openpyxl_formula_errors(ws, target_range)
 
     def audit_data_quality(self, range_str: Optional[str] = None, sheet: Optional[str] = None) -> Dict[str, Any]:
         ws = self._get_sheet(sheet)
@@ -368,6 +443,43 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
             "inconsistent_column_types": inconsistent_types
         }
 
+    def _eval_simple_formula(self, ws, formula_str: str, visited: Optional[set] = None) -> Optional[float]:
+        """Evalúa aritméticamente fórmulas simples fuera de Excel (ej. =G2*0.19, =G2+I2)."""
+        if not isinstance(formula_str, str) or not formula_str.startswith("="):
+            try:
+                return float(formula_str)
+            except (ValueError, TypeError):
+                return None
+
+        if visited is None:
+            visited = set()
+
+        s = formula_str.lstrip("=").strip()
+        tokens = re.findall(r"\b[A-Z]+[0-9]+\b", s)
+        for tok in set(tokens):
+            if tok in visited:
+                return None
+            cell_v = ws[tok].value
+            if isinstance(cell_v, str) and cell_v.startswith("="):
+                resolved = self._eval_simple_formula(ws, cell_v, visited | {tok})
+                if resolved is None:
+                    return None
+                num_v = resolved
+            else:
+                try:
+                    num_v = float(cell_v)
+                except (ValueError, TypeError):
+                    return None
+            s = re.sub(r"\b" + tok + r"\b", str(num_v), s)
+
+        try:
+            allowed = set("0123456789. +-/*()")
+            if all(c in allowed for c in s):
+                return float(eval(s, {"__builtins__": None}, {}))
+        except Exception:
+            pass
+        return None
+
     def aggregate(self, group_by_col: str, metric_col: str, agg_func: str = "sum", sheet: Optional[str] = None, top_n: int = 10, ascending: bool = False) -> Dict[str, Any]:
         ws = self._get_sheet(sheet)
         norm_group = group_by_col.strip().lower()
@@ -396,7 +508,14 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
             try:
                 num = float(m_val)
             except (ValueError, TypeError):
-                continue
+                if isinstance(m_val, str) and m_val.startswith("="):
+                    resolved = self._eval_simple_formula(ws, m_val)
+                    if resolved is not None:
+                        num = resolved
+                    else:
+                        continue
+                else:
+                    continue
 
             g_key = str(g_val)
             cell_coord = ws.cell(row=r_idx, column=metric_idx).coordinate
@@ -426,8 +545,8 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
 
         results = []
         for g_key, data in groups.items():
-            vals = data["values"]
-            total = sum(vals)
+            vals = [float(v) for v in data["values"] if v is not None and not isinstance(v, bool)]
+            total = math.fsum(vals) if vals else 0.0
             avg = total / len(vals) if vals else 0.0
 
             if agg_func.lower() == "sum":
@@ -469,21 +588,65 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
             "ranking": results
         }
 
-    def add_calculated_column(self, header: str, formula_template: str, number_format: Optional[str] = FinancialStyleGuide.CURRENCY_FORMAT, sheet: Optional[str] = None, autofit: bool = True) -> Dict[str, Any]:
+    def add_calculated_column(self, header: str, formula_template: str, number_format: Optional[str] = FinancialStyleGuide.CURRENCY_FORMAT, sheet: Optional[str] = None, autofit: bool = True, dry_run: bool = False) -> Dict[str, Any]:
         from openpyxl.worksheet.table import TableColumn
         ws = self._get_sheet(sheet)
         new_col = ws.max_column + 1
         max_row = ws.max_row
+        col_letter = get_column_letter(new_col)
+        target_range = f"{col_letter}1:{col_letter}{max_row}"
+
+        # Detectar referencias estructuradas de tablas [@Col]
+        is_structured = bool(STRUCTURED_REF_REGEX.search(formula_template) or "[@" in formula_template)
+        headers_map: Dict[str, str] = {}
+        if is_structured:
+            for c in range(1, new_col):
+                h_val = ws.cell(row=1, column=c).value
+                if h_val is not None:
+                    headers_map[str(h_val).strip()] = get_column_letter(c)
+
+        sanitized_template = sanitize_formula_compatibility(formula_template)
+
+        if dry_run:
+            sample_diff = [
+                {
+                    "cell": f"{col_letter}1",
+                    "old_value": ws.cell(row=1, column=new_col).value,
+                    "new_value": header,
+                    "formula": None,
+                }
+            ]
+            for r in range(2, min(max_row + 1, 12)):
+                if is_structured:
+                    rf = transpile_structured_formula(sanitized_template, headers_map, r)
+                else:
+                    rf = propagate_formula_row(sanitized_template, r, base_row=2)
+                sample_diff.append({
+                    "cell": f"{col_letter}{r}",
+                    "old_value": ws.cell(row=r, column=new_col).value,
+                    "new_value": None,
+                    "formula": rf,
+                })
+            return {
+                "status": "success",
+                "dry_run": True,
+                "affected_cells_count": max_row,
+                "target_range": target_range,
+                "header": header,
+                "column_index": new_col,
+                "sample_diff": sample_diff[:10],
+            }
 
         # Set header
         ws.cell(row=1, column=new_col, value=header)
 
         # Parse formula_template to adapt relative row numbers and sanitize compatibility
-        sanitized_template = sanitize_formula_compatibility(formula_template)
-        # If formula has row 2 (e.g. '=L2/J2') or {r}/{row}, adapt while strictly protecting absolute references ($)
         for r in range(2, max_row + 1):
             cell = ws.cell(row=r, column=new_col)
-            row_formula = propagate_formula_row(sanitized_template, r, base_row=2)
+            if is_structured:
+                row_formula = transpile_structured_formula(sanitized_template, headers_map, r)
+            else:
+                row_formula = propagate_formula_row(sanitized_template, r, base_row=2)
             cell.value = row_formula
             if number_format:
                 cell.number_format = number_format
@@ -501,7 +664,6 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
                 break
 
         if autofit:
-            col_letter = get_column_letter(new_col)
             max_len = max(len(str(ws.cell(row=r, column=new_col).value or '')) for r in range(1, max_row + 1))
             ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
@@ -765,7 +927,14 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
             try:
                 num = float(v_val)
             except (ValueError, TypeError):
-                continue
+                if isinstance(v_val, str) and v_val.startswith("="):
+                    resolved = self._eval_simple_formula(src_ws, v_val)
+                    if resolved is not None:
+                        num = resolved
+                    else:
+                        continue
+                else:
+                    continue
 
             r_str = str(r_val).strip()
             c_str = str(c_val).strip()
@@ -938,7 +1107,7 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
         """
         Inserta un gráfico nativo openpyxl.chart en la posición calculada anti-solapamiento.
         """
-        from openpyxl.chart import BarChart, LineChart, PieChart, AreaChart, Reference
+        from openpyxl.chart import AreaChart, BarChart, LineChart, PieChart, Reference
 
         target_ws = self._get_sheet(dest_sheet) if dest_sheet else self.wb.active
 
@@ -1783,3 +1952,450 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
         """Indica si el backend se encuentra ocupado o bloqueado."""
         return False
 
+    @staticmethod
+    def _extract_chart_title_text(chart) -> Optional[str]:
+        if not hasattr(chart, "title") or not chart.title:
+            return None
+        if isinstance(chart.title, str):
+            return chart.title
+        t = chart.title
+        try:
+            if hasattr(t, "tx") and t.tx:
+                if hasattr(t.tx, "rich") and t.tx.rich and hasattr(t.tx.rich, "p"):
+                    texts = []
+                    for p in t.tx.rich.p:
+                        for r in getattr(p, "r", []):
+                            if hasattr(r, "t") and r.t:
+                                texts.append(r.t)
+                    if texts:
+                        return "".join(texts)
+                if hasattr(t.tx, "strRef") and t.tx.strRef:
+                    return str(getattr(t.tx.strRef, "f", ""))
+        except Exception:
+            pass
+        return str(t)
+
+    @staticmethod
+    def _extract_series_refs(s, default_name: str = "Serie"):
+        name = default_name
+        if hasattr(s, "title") and s.title:
+            if isinstance(s.title, str):
+                name = s.title
+            elif hasattr(s.title, "strRef") and s.title.strRef and hasattr(s.title.strRef, "f"):
+                name = str(s.title.strRef.f)
+            elif hasattr(s.title, "v") and s.title.v:
+                name = str(s.title.v)
+            else:
+                name = str(s.title)
+
+        y_ref = ""
+        if hasattr(s, "val") and s.val:
+            if hasattr(s.val, "numRef") and s.val.numRef and hasattr(s.val.numRef, "f"):
+                y_ref = str(s.val.numRef.f)
+            elif hasattr(s.val, "strRef") and s.val.strRef and hasattr(s.val.strRef, "f"):
+                y_ref = str(s.val.strRef.f)
+            else:
+                y_ref = str(s.val)
+
+        x_ref = ""
+        if hasattr(s, "cat") and s.cat:
+            if hasattr(s.cat, "numRef") and s.cat.numRef and hasattr(s.cat.numRef, "f"):
+                x_ref = str(s.cat.numRef.f)
+            elif hasattr(s.cat, "strRef") and s.cat.strRef and hasattr(s.cat.strRef, "f"):
+                x_ref = str(s.cat.strRef.f)
+            else:
+                x_ref = str(s.cat)
+
+        return name, x_ref, y_ref
+
+    def inspect_charts(self, sheet: Optional[str] = None) -> Dict[str, Any]:
+        """Inspecciona todos los gráficos en la hoja especificada o en el libro completo."""
+        sheets_to_inspect = []
+        if sheet:
+            sheets_to_inspect.append(self._get_sheet(sheet))
+        elif self.wb:
+            sheets_to_inspect = list(self.wb.worksheets)
+
+        all_charts = []
+        for ws in sheets_to_inspect:
+            ws_name = getattr(ws, "title", "")
+            charts_in_ws = getattr(ws, "_charts", [])
+            for idx, c in enumerate(charts_in_ws, start=1):
+                c_title = self._extract_chart_title_text(c)
+                c_name = c_title or f"Chart_{idx}"
+                c_type = c.__class__.__name__
+
+                c_top = getattr(c, "top", 0)
+                c_left = getattr(c, "left", 0)
+                c_width = getattr(c, "width", 0)
+                c_height = getattr(c, "height", 0)
+
+                series_list = []
+                for s_idx, s in enumerate(getattr(c, "series", []), start=1):
+                    s_name, x_ref, y_ref = self._extract_series_refs(s, f"Serie {s_idx}")
+                    formula = f"=SERIES({s_name}, {x_ref}, {y_ref}, {s_idx})"
+                    series_list.append({
+                        "index": s_idx,
+                        "name": s_name,
+                        "formula": formula,
+                        "x_range": x_ref,
+                        "y_range": y_ref,
+                        "axis_group": 1,
+                    })
+
+                all_charts.append({
+                    "name": str(c_name),
+                    "sheet": ws_name,
+                    "title": c_title,
+                    "chart_type": c_type,
+                    "top": c_top,
+                    "left": c_left,
+                    "width": c_width,
+                    "height": c_height,
+                    "series_count": len(series_list),
+                    "series": series_list,
+                })
+
+        return {
+            "status": "success",
+            "sheet": sheet,
+            "charts_count": len(all_charts),
+            "charts": all_charts,
+        }
+
+    def extend_chart_series(
+        self,
+        to_col: Optional[str] = None,
+        to_row: Optional[int] = None,
+        sheet: Optional[str] = None,
+        charts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Extiende las series y rangos de categorías de los gráficos indicados."""
+        from antigravity_excel_engine.operations.charts import extend_range_reference
+
+        sheets_to_search = []
+        if sheet:
+            sheets_to_search.append(self._get_sheet(sheet))
+        elif self.wb:
+            sheets_to_search = list(self.wb.worksheets)
+
+        target_chart_names = [c.lower() for c in charts] if charts else None
+        updated_series = []
+
+        for ws in sheets_to_search:
+            for idx, c in enumerate(getattr(ws, "_charts", []), start=1):
+                c_title = self._extract_chart_title_text(c)
+                c_name = c_title or f"Chart_{idx}"
+                if target_chart_names and c_name.lower() not in target_chart_names:
+                    continue
+
+                for s_idx, s in enumerate(getattr(c, "series", []), start=1):
+                    s_name, old_x, old_y = self._extract_series_refs(s, f"Serie {s_idx}")
+                    old_formula = f"=SERIES({s_name}, {old_x}, {old_y}, {s_idx})"
+
+                    new_x = extend_range_reference(old_x, to_col=to_col, to_row=to_row) if old_x else ""
+                    new_y = extend_range_reference(old_y, to_col=to_col, to_row=to_row) if old_y else ""
+
+                    if new_y and hasattr(s, "val") and s.val:
+                        if hasattr(s.val, "numRef") and s.val.numRef:
+                            s.val.numRef.f = new_y
+                        elif hasattr(s.val, "strRef") and s.val.strRef:
+                            s.val.strRef.f = new_y
+
+                    if new_x and hasattr(s, "cat") and s.cat:
+                        if hasattr(s.cat, "numRef") and s.cat.numRef:
+                            s.cat.numRef.f = new_x
+                        elif hasattr(s.cat, "strRef") and s.cat.strRef:
+                            s.cat.strRef.f = new_x
+
+                    new_formula = f"=SERIES({s_name}, {new_x}, {new_y}, {s_idx})"
+
+                    updated_series.append({
+                        "chart_name": str(c_name),
+                        "series_index": s_idx,
+                        "series_name": s_name,
+                        "old_formula": old_formula,
+                        "new_formula": new_formula,
+                    })
+
+        return {
+            "status": "success",
+            "updated_count": len(updated_series),
+            "updated_series": updated_series,
+        }
+
+    def update_chart_series(
+        self,
+        chart_name: str,
+        series_index: int,
+        x_range: Optional[str] = None,
+        y_range: Optional[str] = None,
+        name_ref: Optional[str] = None,
+        formula: Optional[str] = None,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Modifica directamente los parámetros o la fórmula de una serie de gráfico."""
+        from antigravity_excel_engine.operations.charts import parse_series_formula
+
+        sheets_to_search = []
+        if sheet:
+            sheets_to_search.append(self._get_sheet(sheet))
+        elif self.wb:
+            sheets_to_search = list(self.wb.worksheets)
+
+        target_c = None
+        for ws in sheets_to_search:
+            for idx, c in enumerate(getattr(ws, "_charts", []), start=1):
+                c_title = self._extract_chart_title_text(c)
+                c_name = c_title or f"Chart_{idx}"
+                if c_name.lower() == chart_name.lower():
+                    target_c = c
+                    break
+            if target_c:
+                break
+
+        if not target_c:
+            raise ValueError(f"Gráfico '{chart_name}' no encontrado en el libro.")
+
+        series_list = getattr(target_c, "series", [])
+        if series_index < 1 or series_index > len(series_list):
+            raise IndexError(f"Índice de serie {series_index} fuera de rango (1 a {len(series_list)}).")
+
+        s = series_list[series_index - 1]
+        s_name, old_x, old_y = self._extract_series_refs(s, f"Serie {series_index}")
+        old_formula = f"=SERIES({s_name}, {old_x}, {old_y}, {series_index})"
+
+        if formula:
+            parsed = parse_series_formula(formula)
+            new_formula = formula
+            new_name = parsed.get("name_ref") or s_name
+            new_x = parsed.get("x_range") or old_x
+            new_y = parsed.get("y_range") or old_y
+        else:
+            new_name = name_ref if name_ref is not None else s_name
+            new_x = x_range if x_range is not None else old_x
+            new_y = y_range if y_range is not None else old_y
+            new_formula = f"=SERIES({new_name}, {new_x}, {new_y}, {series_index})"
+
+        if new_y and hasattr(s, "val") and s.val:
+            if hasattr(s.val, "numRef") and s.val.numRef:
+                s.val.numRef.f = new_y
+            elif hasattr(s.val, "strRef") and s.val.strRef:
+                s.val.strRef.f = new_y
+
+        if new_x and hasattr(s, "cat") and s.cat:
+            if hasattr(s.cat, "numRef") and s.cat.numRef:
+                s.cat.numRef.f = new_x
+            elif hasattr(s.cat, "strRef") and s.cat.strRef:
+                s.cat.strRef.f = new_x
+
+        if new_name:
+            if hasattr(s, "title") and s.title:
+                if hasattr(s.title, "strRef") and s.title.strRef:
+                    s.title.strRef.f = new_name
+                elif hasattr(s.title, "v"):
+                    s.title.v = new_name
+            else:
+                s.title = new_name
+
+        return {
+            "status": "success",
+            "chart_name": chart_name,
+            "series_index": series_index,
+            "old_formula": old_formula,
+            "new_formula": new_formula,
+        }
+
+    def inspect_workbook(
+        self,
+        sheet: Optional[str] = None,
+        include_charts: bool = True,
+    ) -> Dict[str, Any]:
+        """Inspecciona metadatos globales del libro y estructura detallada por hoja."""
+        st = self.status()
+        sheets_to_inspect = []
+        if sheet:
+            sheets_to_inspect.append(self._get_sheet(sheet))
+        elif self.wb:
+            sheets_to_inspect = list(self.wb.worksheets)
+
+        from antigravity_excel_engine.utils.ranges import get_column_letter
+
+        sheets_detail = {}
+        for ws in sheets_to_inspect:
+            ws_name = getattr(ws, "title", "")
+            last_row = getattr(ws, "max_row", 1) or 1
+            last_col_idx = getattr(ws, "max_column", 1) or 1
+            last_col = get_column_letter(last_col_idx)
+            used_range = f"A1:{last_col}{last_row}"
+
+            headers = []
+            try:
+                if ws.max_row and ws.max_row >= 1:
+                    first_row = ws[1]
+                    headers = [str(c.value) if c.value is not None else "" for c in first_row]
+            except Exception:
+                headers = []
+
+            tables = []
+            try:
+                for t_name, t_obj in ws.tables.items():
+                    tables.append({
+                        "name": t_name,
+                        "range": getattr(t_obj, "ref", ""),
+                    })
+            except Exception:
+                pass
+
+            pivots = []
+            try:
+                for p in getattr(ws, "_pivots", []):
+                    pivots.append({"name": getattr(p, "name", "PivotTable")})
+            except Exception:
+                pass
+
+            charts = []
+            if include_charts:
+                chart_res = self.inspect_charts(sheet=ws_name)
+                charts = chart_res.get("charts", [])
+
+            sheets_detail[ws_name] = {
+                "sheet_name": ws_name,
+                "used_range": used_range,
+                "last_row": last_row,
+                "last_col": last_col,
+                "headers": headers,
+                "tables": tables,
+                "pivots": pivots,
+                "charts": charts,
+            }
+
+        res = {
+            "status": "success",
+            "active_workbook": st.get("active_workbook"),
+            "full_name": st.get("full_name"),
+            "read_only": st.get("read_only", False),
+            "saved": st.get("saved", True),
+            "sheets": st.get("sheets", []),
+            "sheets_detail": sheets_detail,
+        }
+        if sheet and sheet in sheets_detail:
+            res.update(sheets_detail[sheet])
+        return res
+
+    def create_table(
+        self,
+        range_str: str,
+        table_name: Optional[str] = None,
+        style: str = "TableStyleMedium9",
+        has_headers: bool = True,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from openpyxl.worksheet.table import Table, TableStyleInfo
+
+        ws = self._get_sheet(sheet)
+        min_c, min_r, max_c, max_r = range_boundaries(range_str)
+        cols_count = max_c - min_c + 1
+        rows_count = max_r - min_r + 1
+
+        if not table_name:
+            existing_names = {t.name for t in ws.tables.values()}
+            idx = len(ws.tables) + 1
+            cand = f"Table{idx}"
+            while cand in existing_names:
+                idx += 1
+                cand = f"Table{idx}"
+            table_name = cand
+
+        # Sanitizar encabezados si has_headers
+        if has_headers:
+            for c_idx in range(min_c, max_c + 1):
+                cell = ws.cell(row=min_r, column=c_idx)
+                if cell.value is None or str(cell.value).strip() == "":
+                    cell.value = f"Column{c_idx - min_c + 1}"
+
+        from openpyxl.worksheet.table import Table, TableStyleInfo, TableColumn
+
+        tab = Table(displayName=table_name, ref=range_str)
+        tab.tableStyleInfo = TableStyleInfo(
+            name=style,
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=True,
+        )
+        tab.tableColumns = []
+        for i in range(cols_count):
+            c_idx = min_c + i
+            col_name = str(ws.cell(row=min_r, column=c_idx).value or f"Column{i + 1}").strip()
+            tab.tableColumns.append(TableColumn(id=i + 1, name=col_name))
+        ws.add_table(tab)
+
+        return {
+            "status": "success",
+            "table_name": table_name,
+            "range": range_str,
+            "sheet": ws.title,
+            "style": style,
+            "columns_count": cols_count,
+            "rows_count": rows_count,
+        }
+
+    def list_tables(self, sheet: Optional[str] = None) -> List[Dict[str, Any]]:
+        sheets = [self._get_sheet(sheet)] if sheet else self.wb.worksheets
+        tables_list = []
+        for ws in sheets:
+            for tbl in ws.tables.values():
+                cols = []
+                if hasattr(tbl, "tableColumns") and tbl.tableColumns:
+                    cols = [tc.name for tc in tbl.tableColumns if hasattr(tc, "name")]
+                tables_list.append({
+                    "name": tbl.name,
+                    "range": tbl.ref,
+                    "sheet": ws.title,
+                    "columns": cols,
+                })
+        return tables_list
+
+    def resize_table(
+        self,
+        table_name: str,
+        new_range: str,
+        sheet: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from openpyxl.worksheet.table import TableColumn
+
+        sheets = [self._get_sheet(sheet)] if sheet else self.wb.worksheets
+        found_table = None
+        target_ws = None
+
+        for ws in sheets:
+            for tbl in ws.tables.values():
+                if tbl.name.lower() == table_name.lower():
+                    found_table = tbl
+                    target_ws = ws
+                    break
+            if found_table:
+                break
+
+        if not found_table or not target_ws:
+            raise ValueError(f"Tabla '{table_name}' no encontrada en el libro.")
+
+        found_table.ref = new_range
+        min_c, min_r, max_c, max_r = range_boundaries(new_range)
+        new_col_count = max_c - min_c + 1
+
+        current_cols = len(found_table.tableColumns) if hasattr(found_table, "tableColumns") else 0
+        if new_col_count != current_cols:
+            found_table.tableColumns = []
+            for i in range(new_col_count):
+                col_cell_val = target_ws.cell(row=min_r, column=min_c + i).value
+                col_name = str(col_cell_val).strip() if col_cell_val is not None else f"Column{i + 1}"
+                found_table.tableColumns.append(TableColumn(id=i + 1, name=col_name))
+
+        return {
+            "status": "success",
+            "table_name": found_table.name,
+            "new_range": new_range,
+            "sheet": target_ws.title,
+        }

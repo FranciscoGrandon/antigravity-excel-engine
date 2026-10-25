@@ -18,31 +18,31 @@ import time
 from typing import Any, Dict, Optional
 
 from antigravity_excel_engine.ipc.protocol import (
-    PIPE_NAME,
-    BUF_SIZE,
     ACTION_PING,
     ACTION_SHUTDOWN,
-    build_success_response,
+    BUF_SIZE,
+    PIPE_NAME,
     build_error_response,
+    build_success_response,
     validate_request,
 )
 from antigravity_excel_engine.models.errors import (
+    ExcelEngineError,
     ExcelLockError,
-    WorkbookNotFoundError,
     FormulaValidationError,
     PipeConnectionError,
     UnsupportedOperationError,
-    ExcelEngineError,
+    WorkbookNotFoundError,
 )
 from antigravity_excel_engine.utils.logging import get_logger
 
 logger = get_logger("ipc.daemon")
 
 try:
-    import win32pipe  # type: ignore
-    import win32file  # type: ignore
-    import pywintypes  # type: ignore
     import pythoncom  # type: ignore
+    import pywintypes  # type: ignore
+    import win32file  # type: ignore
+    import win32pipe  # type: ignore
 except ImportError:
     win32pipe = None
     win32file = None
@@ -262,22 +262,28 @@ class AntigravityExcelDaemon:
             }
 
         elif command == "set-range":
+            dry_run = bool(args.get("dry_run", False))
             res = engine.set_cell_range(
                 args["start_cell"],
                 args["values"],
                 sheet=args.get("sheet"),
                 autofit=args.get("autofit", False),
+                dry_run=dry_run,
             )
-            res["saved_to"] = engine.save()
+            if not dry_run:
+                res["saved_to"] = engine.save()
             return res
 
         elif command == "set-cells":
+            dry_run = bool(args.get("dry_run", False))
             res = engine.set_cells(
                 args["cells"],
                 sheet=args.get("sheet"),
                 autofit=args.get("autofit", False),
+                dry_run=dry_run,
             )
-            res["saved_to"] = engine.save()
+            if not dry_run:
+                res["saved_to"] = engine.save()
             return res
 
         elif command == "copy-paste":
@@ -317,14 +323,17 @@ class AntigravityExcelDaemon:
             }
 
         elif command == "add-column":
+            dry_run = bool(args.get("dry_run", False))
             res = engine.add_calculated_column(
                 range_str=args.get("range", ""),
                 new_col_name=args["header"],
                 formula_template=args["formula"],
                 sheet=args.get("sheet"),
                 col_format=args.get("number_format"),
+                dry_run=dry_run,
             )
-            res["saved_to"] = engine.save()
+            if not dry_run:
+                res["saved_to"] = engine.save()
             return res
 
         elif command == "create-pivot":
@@ -431,13 +440,78 @@ class AntigravityExcelDaemon:
                 kwargs=args.get("kwargs"),
             )
 
+        elif command == "inspect-workbook":
+            return engine.inspect_workbook(
+                sheet=args.get("sheet"),
+                include_charts=args.get("include_charts", True),
+            )
+
+        elif command == "inspect-charts":
+            return engine.inspect_charts(
+                sheet=args.get("sheet"),
+            )
+
+        elif command == "extend-chart-series":
+            res = engine.extend_chart_series(
+                to_col=args.get("to_col"),
+                to_row=args.get("to_row"),
+                sheet=args.get("sheet"),
+                charts=args.get("charts"),
+            )
+            res["saved_to"] = engine.save()
+            return res
+
+        elif command == "update-chart-series":
+            res = engine.update_chart_series(
+                chart_name=args["chart_name"],
+                series_index=int(args["series_index"]),
+                x_range=args.get("x_range"),
+                y_range=args.get("y_range"),
+                name_ref=args.get("name_ref"),
+                formula=args.get("formula"),
+                sheet=args.get("sheet"),
+            )
+            res["saved_to"] = engine.save()
+            return res
+
+        elif command == "batch":
+            ops = args.get("operations", [])
+            return engine.batch(ops)
+
+        elif command in ("create-table", "create_table"):
+            res = engine.create_table(
+                range_str=args["range"],
+                table_name=args.get("table_name") or args.get("name"),
+                style=args.get("style", "TableStyleMedium9"),
+                has_headers=args.get("has_headers", True),
+                sheet=args.get("sheet"),
+            )
+            res["saved_to"] = engine.save()
+            return res
+
+        elif command in ("inspect-table", "inspect_table"):
+            fmt = args.get("format", "json")
+            if fmt.lower() == "markdown":
+                return {
+                    "markdown": engine.get_ai_grounding_context(
+                        table_or_range=args.get("table_or_range") or args.get("range", ""),
+                        sheet=args.get("sheet"),
+                        format="markdown",
+                    )
+                }
+            return engine.inspect_table_schema(
+                table_or_range=args.get("table_or_range") or args.get("range", ""),
+                sheet=args.get("sheet"),
+            )
+
         else:
             raise UnsupportedOperationError(
                 f"Comando no reconocido: '{command}'. "
                 f"Comandos disponibles: status, get-csv, get-ranges, set-range, set-cells, "
                 f"copy-paste, check-errors, audit-quality, aggregate, add-column, "
                 f"create-pivot, create-chart, apply-preset, summary-table, dedup, "
-                f"flag-outliers, clean, curate, wait-until-ready, dispatch-com."
+                f"flag-outliers, clean, curate, wait-until-ready, dispatch-com, "
+                f"inspect-workbook, inspect-charts, extend-chart-series, update-chart-series, batch."
             )
 
     # ──────────────────────────── Run Loop ───────────────────────────────────

@@ -17,11 +17,12 @@ import os
 import sys
 from typing import Any, Optional
 
+from antigravity_excel_engine.ipc.protocol import DEFAULT_TIMEOUT_MS
 from antigravity_excel_engine.ipc.client import (
     call_command,
     start_daemon_process,
-    stop_daemon_process,
     status_daemon,
+    stop_daemon_process,
 )
 from antigravity_excel_engine.utils.logging import get_logger
 
@@ -62,7 +63,7 @@ def _output(data: Any, as_json: bool) -> None:
         print(data)
 
 
-def _try_daemon(command: str, args_payload: dict, timeout_ms: int = 10000) -> Optional[dict]:
+def _try_daemon(command: str, args_payload: dict, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Optional[dict]:
     """
     Intenta despachar el comando al daemon residente.
     Retorna la respuesta si el daemon está activo, o None para fallback.
@@ -110,12 +111,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start-cell", required=True); p.add_argument("--values-json")
     p.add_argument("--input-file"); p.add_argument("--stdin", action="store_true")
     p.add_argument("--sheet"); p.add_argument("--autofit", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
 
     # set-cells
     p = sub.add_parser("set-cells", parents=[parent])
     p.add_argument("--cells-json"); p.add_argument("--input-file")
     p.add_argument("--stdin", action="store_true"); p.add_argument("--sheet")
     p.add_argument("--autofit", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
 
     # copy-paste
     p = sub.add_parser("copy-paste", parents=[parent])
@@ -144,6 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--header", required=True); p.add_argument("--formula", required=True)
     p.add_argument("--number-format"); p.add_argument("--sheet")
     p.add_argument("--no-autofit", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
 
     # create-pivot
     p = sub.add_parser("create-pivot", parents=[parent])
@@ -216,6 +220,52 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--args-json"); p.add_argument("--kwargs-json")
     p.add_argument("--input-file"); p.add_argument("--stdin", action="store_true")
 
+    # inspect-workbook
+    p = sub.add_parser("inspect-workbook", parents=[parent])
+    p.add_argument("--sheet")
+    p.add_argument("--no-charts", action="store_true")
+
+    # inspect-charts
+    p = sub.add_parser("inspect-charts", parents=[parent])
+    p.add_argument("--sheet")
+
+    # extend-chart-series
+    p = sub.add_parser("extend-chart-series", parents=[parent])
+    p.add_argument("--to-col")
+    p.add_argument("--to-row", type=int)
+    p.add_argument("--sheet")
+    p.add_argument("--charts", nargs="*")
+
+    # update-chart-series
+    p = sub.add_parser("update-chart-series", parents=[parent])
+    p.add_argument("--chart", "--chart-name", dest="chart", required=True)
+    p.add_argument("--series-index", type=int, required=True)
+    p.add_argument("--x-range")
+    p.add_argument("--y-range")
+    p.add_argument("--name-ref")
+    p.add_argument("--formula")
+    p.add_argument("--sheet")
+
+    # batch
+    p = sub.add_parser("batch", parents=[parent])
+    p.add_argument("--operations-json")
+    p.add_argument("--input-file")
+    p.add_argument("--stdin", action="store_true")
+
+    # create-table
+    p = sub.add_parser("create-table", aliases=["create_table"], parents=[parent])
+    p.add_argument("--range", "--range-str", dest="range", required=True)
+    p.add_argument("--name", "--table-name", dest="table_name")
+    p.add_argument("--style", default="TableStyleMedium9")
+    p.add_argument("--no-headers", action="store_true")
+    p.add_argument("--sheet")
+
+    # inspect-table
+    p = sub.add_parser("inspect-table", aliases=["inspect_table"], parents=[parent])
+    p.add_argument("--table", "--range", "--table-or-range", dest="table_or_range", required=True)
+    p.add_argument("--sheet")
+    p.add_argument("--format", choices=["json", "markdown"], default="json")
+
     return parser
 
 
@@ -256,12 +306,14 @@ def _build_payload(args: argparse.Namespace) -> dict:
         if not values:
             raise ValueError("Debe proporcionar matriz de valores vía --values-json, --input-file o --stdin")
         return {**base, "start_cell": args.start_cell, "values": values,
-                "sheet": args.sheet, "autofit": args.autofit}
+                "sheet": args.sheet, "autofit": args.autofit,
+                "dry_run": getattr(args, "dry_run", False)}
     if cmd == "set-cells":
         cells = _read_json_input(args, "cells_json")
         if not cells:
             raise ValueError("Debe proporcionar mapa de celdas vía --cells-json, --input-file o --stdin")
-        return {**base, "cells": cells, "sheet": args.sheet, "autofit": args.autofit}
+        return {**base, "cells": cells, "sheet": args.sheet, "autofit": args.autofit,
+                "dry_run": getattr(args, "dry_run", False)}
     if cmd == "copy-paste":
         return {**base, "src": args.src, "dst": args.dst,
                 "src_sheet": args.src_sheet, "dst_sheet": args.dst_sheet, "type": args.type}
@@ -276,7 +328,8 @@ def _build_payload(args: argparse.Namespace) -> dict:
     if cmd == "add-column":
         return {**base, "header": args.header, "formula": args.formula,
                 "number_format": args.number_format, "sheet": args.sheet,
-                "autofit": not args.no_autofit}
+                "autofit": not args.no_autofit,
+                "dry_run": getattr(args, "dry_run", False)}
     if cmd == "create-pivot":
         return {**base, "source": args.source, "rows": args.rows, "cols": args.cols,
                 "value_field": args.value_field, "value_func": args.value_func,
@@ -342,6 +395,29 @@ def _build_payload(args: argparse.Namespace) -> dict:
             d_args = [d_args]
         return {**base, "target": args.target, "member": args.member,
                 "args": d_args, "kwargs": d_kwargs}
+    if cmd == "inspect-workbook":
+        return {**base, "sheet": args.sheet, "include_charts": not getattr(args, "no_charts", False)}
+    if cmd == "inspect-charts":
+        return {**base, "sheet": args.sheet}
+    if cmd == "extend-chart-series":
+        return {**base, "to_col": args.to_col, "to_row": args.to_row,
+                "sheet": args.sheet, "charts": args.charts}
+    if cmd == "update-chart-series":
+        return {**base, "chart_name": args.chart, "series_index": args.series_index,
+                "x_range": args.x_range, "y_range": args.y_range,
+                "name_ref": args.name_ref, "formula": args.formula, "sheet": args.sheet}
+    if cmd == "batch":
+        ops = _read_json_input(args, "operations_json")
+        if not ops or not isinstance(ops, list):
+            raise ValueError("Debe proporcionar una lista de operaciones vía --operations-json, --input-file o --stdin")
+        return {**base, "operations": ops}
+    if cmd in ("create-table", "create_table"):
+        return {**base, "range": args.range, "table_name": getattr(args, "table_name", None),
+                "style": getattr(args, "style", "TableStyleMedium9"),
+                "has_headers": not getattr(args, "no_headers", False), "sheet": args.sheet}
+    if cmd in ("inspect-table", "inspect_table"):
+        return {**base, "table_or_range": getattr(args, "table_or_range", ""),
+                "sheet": args.sheet, "format": getattr(args, "format", "json")}
     return base
 
 
@@ -371,19 +447,25 @@ def _run_standalone(cmd: str, payload: dict, as_json: bool) -> None:
             _output({"status": "success", "ranges": res}, as_json)
 
         elif cmd == "set-range":
+            dry_run = bool(payload.get("dry_run", False))
             res = engine.set_cell_range(
                 payload["start_cell"], payload["values"],
-                sheet=payload.get("sheet"), autofit=payload.get("autofit", False)
+                sheet=payload.get("sheet"), autofit=payload.get("autofit", False),
+                dry_run=dry_run,
             )
-            res["saved_to"] = engine.save()
+            if not dry_run:
+                res["saved_to"] = engine.save()
             _output(res, as_json)
 
         elif cmd == "set-cells":
+            dry_run = bool(payload.get("dry_run", False))
             res = engine.set_cells(
                 payload["cells"], sheet=payload.get("sheet"),
-                autofit=payload.get("autofit", False)
+                autofit=payload.get("autofit", False),
+                dry_run=dry_run,
             )
-            res["saved_to"] = engine.save()
+            if not dry_run:
+                res["saved_to"] = engine.save()
             _output(res, as_json)
 
         elif cmd == "copy-paste":
@@ -421,14 +503,17 @@ def _run_standalone(cmd: str, payload: dict, as_json: bool) -> None:
             _output({"status": "success", "aggregation": res}, as_json)
 
         elif cmd == "add-column":
+            dry_run = bool(payload.get("dry_run", False))
             res = engine.add_calculated_column(
                 range_str=payload.get("range", ""),
                 new_col_name=payload["header"],
                 formula_template=payload["formula"],
                 sheet=payload.get("sheet"),
                 col_format=payload.get("number_format"),
+                dry_run=dry_run,
             )
-            res["saved_to"] = engine.save()
+            if not dry_run:
+                res["saved_to"] = engine.save()
             _output(res, as_json)
 
         elif cmd == "create-pivot":
@@ -538,6 +623,76 @@ def _run_standalone(cmd: str, payload: dict, as_json: bool) -> None:
             )
             _output(res, as_json)
 
+        elif cmd == "inspect-workbook":
+            res = engine.inspect_workbook(
+                sheet=payload.get("sheet"),
+                include_charts=payload.get("include_charts", True),
+            )
+            _output(res, as_json)
+
+        elif cmd == "inspect-charts":
+            res = engine.inspect_charts(
+                sheet=payload.get("sheet"),
+            )
+            _output(res, as_json)
+
+        elif cmd == "extend-chart-series":
+            res = engine.extend_chart_series(
+                to_col=payload.get("to_col"),
+                to_row=payload.get("to_row"),
+                sheet=payload.get("sheet"),
+                charts=payload.get("charts"),
+            )
+            res["saved_to"] = engine.save()
+            _output(res, as_json)
+
+        elif cmd == "update-chart-series":
+            res = engine.update_chart_series(
+                chart_name=payload["chart_name"],
+                series_index=int(payload["series_index"]),
+                x_range=payload.get("x_range"),
+                y_range=payload.get("y_range"),
+                name_ref=payload.get("name_ref"),
+                formula=payload.get("formula"),
+                sheet=payload.get("sheet"),
+            )
+            res["saved_to"] = engine.save()
+            _output(res, as_json)
+
+        elif cmd == "batch":
+            res = engine.batch(payload.get("operations", []))
+            _output(res, as_json)
+
+        elif cmd in ("create-table", "create_table"):
+            res = engine.create_table(
+                range_str=payload["range"],
+                table_name=payload.get("table_name"),
+                style=payload.get("style", "TableStyleMedium9"),
+                has_headers=payload.get("has_headers", True),
+                sheet=payload.get("sheet"),
+            )
+            res["saved_to"] = engine.save()
+            _output(res, as_json)
+
+        elif cmd in ("inspect-table", "inspect_table"):
+            fmt = payload.get("format", "json")
+            if fmt.lower() == "markdown":
+                md_out = engine.get_ai_grounding_context(
+                    table_or_range=payload["table_or_range"],
+                    sheet=payload.get("sheet"),
+                    format="markdown",
+                )
+                if as_json:
+                    _output({"status": "success", "markdown": md_out}, True)
+                else:
+                    print(md_out)
+            else:
+                res = engine.inspect_table_schema(
+                    table_or_range=payload["table_or_range"],
+                    sheet=payload.get("sheet"),
+                )
+                _output(res, as_json)
+
         else:
             _output({"status": "error", "error": f"Comando no reconocido: '{cmd}'"}, True)
             sys.exit(1)
@@ -589,7 +744,9 @@ def main() -> None:
         sys.exit(1)
 
     # Intentar daemon primero (< 30ms)
-    daemon_resp = _try_daemon(args.command, payload)
+    file_path = payload.get("file") or getattr(args, "file", None) or ""
+    timeout_ms = 60000 if (str(file_path).startswith(r"\\") or str(file_path).startswith("//")) else DEFAULT_TIMEOUT_MS
+    daemon_resp = _try_daemon(args.command, payload, timeout_ms=timeout_ms)
     if daemon_resp is not None:
         if daemon_resp.get("status") == "success":
             result = daemon_resp.get("result")

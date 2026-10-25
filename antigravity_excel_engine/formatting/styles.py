@@ -4,6 +4,7 @@ Funciones universales para aplicar estilos, formatos de celda y presets en openp
 """
 
 from typing import Any, Dict, List, Optional, Union
+
 from .presets import FinancialStyleGuide
 
 
@@ -87,7 +88,7 @@ def apply_style_preset_openpyxl(cells: List[Any], preset: str) -> None:
       - percent
       - date
     """
-    from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     p = preset.lower()
     if p == "header":
