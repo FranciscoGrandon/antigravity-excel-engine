@@ -2291,7 +2291,7 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
         has_headers: bool = True,
         sheet: Optional[str] = None,
     ) -> Dict[str, Any]:
-        from openpyxl.worksheet.table import Table, TableStyleInfo
+        from openpyxl.worksheet.table import Table, TableColumn, TableStyleInfo
 
         ws = self._get_sheet(sheet)
         min_c, min_r, max_c, max_r = range_boundaries(range_str)
@@ -2313,8 +2313,6 @@ class HeadlessOpenPyXLBackend(BaseExcelBackend):
                 cell = ws.cell(row=min_r, column=c_idx)
                 if cell.value is None or str(cell.value).strip() == "":
                     cell.value = f"Column{c_idx - min_c + 1}"
-
-        from openpyxl.worksheet.table import Table, TableStyleInfo, TableColumn
 
         tab = Table(displayName=table_name, ref=range_str)
         tab.tableStyleInfo = TableStyleInfo(
